@@ -52,13 +52,23 @@ class Agnda extends React.Component {
       }
 
       if (!minuteLocked) {
-        if (i%2==0) topics.push({ name: name, seconds: 10 * 60, elapsed: 0})
-          else
-        topics.push({ name: name, seconds: 15 * 60, elapsed: 0});
+        if (i%2==0) {
+          topics.push({ name: name, seconds: 10 * 60, elapsed: 0});
+        } else {
+          topics.push({ name: name, seconds: 15 * 60, elapsed: 0});
+        }
       } else {
         topics.push({ name: name, seconds: duration * 60, elapsed: 0});
       }
     }
+
+    let totalSeconds = 0;
+
+    for (var k in topics) {
+      totalSeconds += topics[k].seconds;
+    }
+
+    if (totalSeconds > 0) document.title = this.toTime(totalSeconds);
 
     this.state = {
       topics: topics,
@@ -81,6 +91,7 @@ class Agnda extends React.Component {
     this.pomodoro = this.pomodoro.bind(this);
     this.hourdoro = this.hourdoro.bind(this);
     this.reset = this.reset.bind(this);
+    this.toTime = this.toTime.bind(this);
     this.handleTopicClick = this.handleTopicClick.bind(this);
     this.handleEditName = this.handleEditName.bind(this);
     this.handleEditTime = this.handleEditTime.bind(this);
@@ -248,6 +259,22 @@ class Agnda extends React.Component {
       seconds: this.state.topics[0].seconds,
       elapsed: 0
     });
+  }
+
+
+  toTime(scnds) {
+    const mins = Math.floor( scnds / 60 );
+    let secs = scnds % 60;
+
+    let minutes = (mins == 1) ? mins + " minute" : mins + "-minute";
+    let seconds = (secs == 1) ? secs + " second" : secs + "-second";
+
+    if (mins < 1)
+      return seconds + " class";
+    else if (secs > 0)
+      return minutes + " and " + seconds + " class";
+    else
+      return minutes + " class";
   }
   
   
