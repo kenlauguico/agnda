@@ -39,11 +39,25 @@ class Agnda extends React.Component {
       ];
     }
 
+    let minuteLocked = false;
+    let duration = 10;
+
     for (var i=0; i<hashes.length; i++) {
       let name = decodeURI(hashes[i].replace('#',''));
-      if (i%2==0) topics.push({ name: name, seconds: 10 * 60, elapsed: 0})
-        else
-      topics.push({ name: name, seconds: 15 * 60, elapsed: 0});
+
+      if (i==0 && name>=5) {
+        minuteLocked = true;
+        duration = name;
+        continue;
+      }
+
+      if (!minuteLocked) {
+        if (i%2==0) topics.push({ name: name, seconds: 10 * 60, elapsed: 0})
+          else
+        topics.push({ name: name, seconds: 15 * 60, elapsed: 0});
+      } else {
+        topics.push({ name: name, seconds: duration * 60, elapsed: 0});
+      }
     }
 
     this.state = {
