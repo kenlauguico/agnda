@@ -41,7 +41,9 @@ class Agnda extends React.Component {
 
     for (var i=0; i<hashes.length; i++) {
       let name = decodeURI(hashes[i].replace('#',''));
-      topics.push({ name: name, seconds: 5 * 60, elapsed: 0});
+      if (i%2==0) topics.push({ name: name, seconds: 10 * 60, elapsed: 0})
+        else
+      topics.push({ name: name, seconds: 15 * 60, elapsed: 0});
     }
 
     this.state = {
