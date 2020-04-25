@@ -3,6 +3,9 @@ import './App.css';
 import { AgndTopic } from './agndtopic';
 import { Duration } from './duration';
 
+import {Button} from '@workday/canvas-kit-react-button';
+
+
 
 var pomodoro = [
   { name: 'Work', seconds: 25 * 60, elapsed: 0 },
@@ -324,14 +327,14 @@ class Agnda extends React.Component {
   render() {
     let on = this.state.on;
     let button = {
-      onoff: <button onClick={ on ? this.stop : this.start }>{ on ? "Stop" : "Start" }</button>,
+      onoff: <Button variant={Button.Variant.Primary} onClick={ on ? this.stop : this.start }>{ on ? "Stop" : "Start" }</Button>,
       
-      newtopic: <button onClick={ this.addNewTopic }>+</button>,
-      deletetopic: <button onClick={ this.deleteTopic }>-</button>,
+      newtopic: <Button onClick={ this.addNewTopic }>+</Button>,
+      deletetopic: <Button onClick={ this.deleteTopic }>-</Button>,
 
-      pomo: <button onClick={ this.pomodoro }>Pomodoro-ize!</button>,
-      hour: <button onClick={ this.hourdoro }>Hourdoro-ize!</button>,
-      reset: <button onClick={ this.reset }>Reset</button>
+      pomo: <Button onClick={ this.pomodoro }>Pomodoro-ize!</Button>,
+      hour: <Button onClick={ this.hourdoro }>Hourdoro-ize!</Button>,
+      reset: <Button variant={Button.Variant.Delete} onClick={ this.reset }>Reset</Button>
     }
 
     return (
