@@ -16,6 +16,7 @@ export class AgndTopic extends React.Component {
     const name = this.props.name;
     const elapsed = this.toTime(this.props.elapsed);
     const seconds = this.toTime(this.props.seconds);
+    const isLast = this.props.isLast;
     let style = this.props.class + ' topic-item';
     
     if (this.props.elapsed > this.props.seconds && !style.match('over')) {
@@ -26,7 +27,7 @@ export class AgndTopic extends React.Component {
       <button class={style} onClick={this.props.onClick} onDoubleClick={this.props.onDoubleClick}>
         <div>{name}</div>
         <div><span>{elapsed}</span> / <span>{seconds}</span></div>
-        ↓
+        { !isLast ? '↓' : '' }
       </button>
     );
   }

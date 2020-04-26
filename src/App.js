@@ -182,6 +182,7 @@ class Agnda extends React.Component {
         elapsed={ topic.elapsed }
         onClick={ () => this.handleTopicClick(topic, index) } 
         onDoubleClick={ () => this.editorInput.focus() }
+        isLast={ index == topics.length-1 }
         />
     ));
   }
@@ -208,7 +209,6 @@ class Agnda extends React.Component {
     });
 
     this.editorInput.focus();
-    this.editorInput.select()
   }
   
   deleteTopic() {
