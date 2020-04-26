@@ -1,4 +1,21 @@
 import React, { Component } from 'react';
+import { Select } from 'react-rainbow-components';
+
+
+const containerStyles = {
+    width: 150,
+    margin: '1em auto',
+};
+
+const options = [
+    { value: '5', label: '5 minutes' },
+    { value: '15', label: '15 minutes' },
+    { value: '25', label: '25 minutes' },
+    { value: '30', label: '30 minutes' },
+    { value: '45', label: '45 minutes' },
+    { value: '60', label: '1 hour' },
+];
+
 
 export class Duration extends React.Component {
   constructor(props) {
@@ -13,12 +30,14 @@ export class Duration extends React.Component {
   
   render() {
     return (
-      <select value={this.props.value / 60} onChange={this.handleChange}>
-        <option value="5">5 minutes</option>
-        <option value="15">15 minutes</option>
-        <option value="25">25 minutes</option>
-        <option value="30">30 minutes</option>
-      </select>
+      <Select
+        value={this.props.value / 60}
+        onChange={this.handleChange}
+        options={options}
+        id="example-select-1"
+        style={containerStyles}
+        className="rainbow-m-vertical_x-large rainbow-p-horizontal_medium rainbow-m_auto"
+      />
     );
   }
 }

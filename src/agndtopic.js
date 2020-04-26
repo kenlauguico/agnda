@@ -23,9 +23,10 @@ export class AgndTopic extends React.Component {
     }
     
     return (
-      <button class={style} onClick={this.props.onClick}>
+      <button class={style} onClick={this.props.onClick} onDoubleClick={this.props.onDoubleClick}>
         <div>{name}</div>
         <div><span>{elapsed}</span> / <span>{seconds}</span></div>
+        ↓
       </button>
     );
   }

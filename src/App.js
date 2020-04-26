@@ -3,7 +3,9 @@ import './App.css';
 import { AgndTopic } from './agndtopic';
 import { Duration } from './duration';
 
-import {Button} from '@workday/canvas-kit-react-button';
+import { Input, ButtonGroup, ButtonIcon, ButtonMenu, MenuItem } from 'react-rainbow-components';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { faPlay, faPause, faPlus, faMinus, faAngleDown } from '@fortawesome/free-solid-svg-icons';
 
 
 
@@ -19,7 +21,8 @@ var pomodoro = [
 ];
 
 var hourdoro = [
-  { name: 'Warm up', seconds: 15 * 60, elapsed: 0 },
+  { name: 'Warm up', seconds: 5 * 60, elapsed: 0 },
+  { name: 'Get serious', seconds: 10 * 60, elapsed: 0 },
   { name: 'Deep focus', seconds: 15 * 60, elapsed: 0 },
   { name: 'Finish task!', seconds: 15 * 60, elapsed: 0 },
   { name: 'Break', seconds: 15 * 60, elapsed: 0 },
@@ -36,9 +39,9 @@ class Agnda extends React.Component {
 
     if (hashes.length == 0) {
      topics = [
-        { name: "Introductions", seconds: 5 * 60, elapsed: 0},
-        { name: "Discussion", seconds: 10 * 60, elapsed: 0},
-        { name: "Open Forum", seconds: 5 * 60, elapsed: 0},
+        { name: "LET'S", seconds: 5 * 60, elapsed: 0},
+        { name: "MAKE", seconds: 10 * 60, elapsed: 0},
+        { name: "SHIT", seconds: 5 * 60, elapsed: 0},
       ];
     }
 
@@ -101,6 +104,8 @@ class Agnda extends React.Component {
     this.handleChangeAutoTopic = this.handleChangeAutoTopic.bind(this);
     this.addNewTopic = this.addNewTopic.bind(this);
     this.deleteTopic = this.deleteTopic.bind(this);
+
+    this.editorInput = null;
   }
   
   
@@ -176,6 +181,7 @@ class Agnda extends React.Component {
         seconds={ topic.seconds } 
         elapsed={ topic.elapsed }
         onClick={ () => this.handleTopicClick(topic, index) } 
+        onDoubleClick={ () => this.editorInput.focus() }
         />
     ));
   }
@@ -200,6 +206,9 @@ class Agnda extends React.Component {
       name: topic.name,
       seconds: topic.seconds
     });
+
+    this.editorInput.focus();
+    this.editorInput.select()
   }
   
   deleteTopic() {
@@ -327,53 +336,92 @@ class Agnda extends React.Component {
   render() {
     let on = this.state.on;
     let button = {
-      onoff: <Button variant={Button.Variant.Primary} onClick={ on ? this.stop : this.start }>{ on ? "Stop" : "Start" }</Button>,
-      
-      newtopic: <Button onClick={ this.addNewTopic }>+</Button>,
-      deletetopic: <Button onClick={ this.deleteTopic }>-</Button>,
-
-      pomo: <Button onClick={ this.pomodoro }>Pomodoro-ize!</Button>,
-      hour: <Button onClick={ this.hourdoro }>Hourdoro-ize!</Button>,
-      reset: <Button variant={Button.Variant.Delete} onClick={ this.reset }>Reset</Button>
+      controls:
+        <ButtonGroup className="rainbow-m-around_medium controls">
+          <ButtonIcon 
+            onClick={ on ? this.stop : this.start }
+            variant="border-filled"
+            icon={ on ? <FontAwesomeIcon icon={faPause} /> : <FontAwesomeIcon icon={faPlay} />}
+          />
+          <ButtonIcon
+            onClick={ this.addNewTopic }
+            variant="border-filled"
+            icon={<FontAwesomeIcon icon={faPlus} />}
+          />
+          <ButtonIcon
+            onClick={ this.deleteTopic } 
+            variant="border-filled"
+            icon={<FontAwesomeIcon icon={faMinus} />}
+          />
+          <ButtonMenu
+            menuAlignment="right"
+            menuSize="x-small"
+            icon={<FontAwesomeIcon icon={faAngleDown} />}
+          >
+            <MenuItem
+              onClick={ this.pomodoro }
+              label="Pomodoro-ize!" />
+            <MenuItem
+              onClick={ this.hourdoro }
+              label="Hourdoro-ize!" 
+            />
+            <MenuItem
+              onClick={ this.reset }
+              label="Reset"
+            />
+          </ButtonMenu>
+        </ButtonGroup>
     }
+
+
+    let part = {
+      controls: button.controls,
+      agenda: this.buildAgenda(),
+      options:
+        <div class="options">
+          <input
+            id="auto-change"
+            type="checkbox"
+            checked={ this.state.autoTopic }
+            onChange={ this.handleChangeAutoTopic }
+          />
+          <label for="auto-change">Auto-change topic</label>
+        </div>
+    }
+
+
+    let section = {
+      agenda: <div class="agenda">
+          { part.agenda }
+          { part.controls }
+          { part.options }
+        </div>,
+      
+      editor:
+      <div class="editor">
+        <Input
+          id="input-component-1"
+          placeholder="topic or task"
+          className="rainbow-m-vertical_x-large rainbow-p-horizontal_medium rainbow-m_auto topic"
+          onChange={ this.handleEditName } 
+          value={ this.state.name } 
+          ref={elem => (this.editorInput = elem)}
+        />
+        <Duration 
+          class="duration"
+          onChange={ this.handleEditTime }
+          value={ this.state.seconds }
+        />
+      </div>
+    }
+
 
     return (
       <div class="meeting">
-        <div class="agenda">
-          <div class="controls">
-            { button.onoff }
-            { button.newtopic }
-            { button.deletetopic }
-          </div>
-          
-          { this.buildAgenda() }
+        
+        { section.editor }
+        { section.agenda }
 
-          <div class="templates">
-            { button.pomo }
-            { button.hour }
-            { button.reset }
-          </div>
-          <input 
-            id="auto-change"
-            type="checkbox"
-            checked={ this.state.autoTopic } 
-            onChange={ this.handleChangeAutoTopic } 
-            />
-          <label for="auto-change">Auto-change topic</label>
-        </div>
-        <div class="editor">
-          <input 
-            type="text" 
-            class="topic" 
-            onChange={ this.handleEditName } 
-            value={ this.state.name } 
-            />
-          <Duration 
-            class="duration"
-            onChange={ this.handleEditTime }
-            value={ this.state.seconds }
-            />
-        </div>
       </div>
     );
   }
