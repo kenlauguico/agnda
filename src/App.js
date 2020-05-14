@@ -68,14 +68,6 @@ class Agnda extends React.Component {
       }
     }
 
-    let totalSeconds = 0;
-
-    for (var k in topics) {
-      totalSeconds += topics[k].seconds;
-    }
-
-    if (totalSeconds > 0) document.title = this.toTime(totalSeconds);
-
     this.state = {
       topics: topics,
 
@@ -95,6 +87,7 @@ class Agnda extends React.Component {
     this.toggle = this.toggle.bind(this);
     this.stop = this.stop.bind(this);
     this.updateTime = this.updateTime.bind(this);
+    this.updateTitle = this.updateTitle.bind(this);
     this.pomodoro = this.pomodoro.bind(this);
     this.hourdoro = this.hourdoro.bind(this);
     this.reset = this.reset.bind(this);
@@ -151,9 +144,21 @@ class Agnda extends React.Component {
     this.setState({
       elapsed: this.state.elapsed+1
     });
+
+    this.updateTitle();
     
     if (this.state.autoTopic)
       this.shouldChangeTopic();
+  }
+
+  updateTitle() {
+    let totalSeconds = 0;
+
+    for (var k in this.state.topics) {
+      totalSeconds += this.state.topics[k].seconds;
+    }
+
+    if (totalSeconds > 0) document.title = this.toTime(totalSeconds);
   }
   
   shouldChangeTopic() {
@@ -308,11 +313,11 @@ class Agnda extends React.Component {
     let seconds = (secs == 1) ? secs + " second" : secs + "-second";
 
     if (mins < 1)
-      return seconds + " class";
+      return seconds + " session";
     else if (secs > 0)
-      return minutes + " and " + seconds + " class";
+      return minutes + " and " + seconds + " session";
     else
-      return minutes + " class";
+      return minutes + " session";
   }
   
   
