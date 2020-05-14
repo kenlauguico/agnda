@@ -92,6 +92,7 @@ class Agnda extends React.Component {
     
 
     this.start = this.start.bind(this);
+    this.toggle = this.toggle.bind(this);
     this.stop = this.stop.bind(this);
     this.updateTime = this.updateTime.bind(this);
     this.pomodoro = this.pomodoro.bind(this);
@@ -104,8 +105,29 @@ class Agnda extends React.Component {
     this.handleChangeAutoTopic = this.handleChangeAutoTopic.bind(this);
     this.addNewTopic = this.addNewTopic.bind(this);
     this.deleteTopic = this.deleteTopic.bind(this);
-
     this.editorInput = null;
+
+    this.handleKeyPress = this.handleKeyPress.bind(this);
+  }
+
+
+  handleKeyPress(e) {
+    this.setState({currentKey: e.keyCode});
+
+    if (e.target.type == 'text') return;
+
+    if(e.keyCode === 32) {
+      this.toggle();
+      console.log('space pressed!');
+    }
+  }
+  
+  componentDidMount() {
+    document.addEventListener('keydown', this.handleKeyPress);
+  }
+  
+  componentWillUnmount() {
+    document.removeEventListener('keydown', this.handleKeyPress);
   }
   
   
@@ -152,6 +174,10 @@ class Agnda extends React.Component {
         this.stop;
       }
     }
+  }
+
+  toggle() {
+    this.state.on ? this.stop() : this.start();
   }
   
   stop() {
@@ -339,7 +365,7 @@ class Agnda extends React.Component {
       controls:
         <ButtonGroup className="rainbow-m-around_medium controls">
           <ButtonIcon 
-            onClick={ on ? this.stop : this.start }
+            onClick={ this.toggle }
             variant="border-filled"
             icon={ on ? <FontAwesomeIcon icon={faPause} /> : <FontAwesomeIcon icon={faPlay} />}
           />
