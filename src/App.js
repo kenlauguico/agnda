@@ -28,6 +28,13 @@ var hourdoro = [
   { name: 'Break', seconds: 15 * 60, elapsed: 0 },
 ];
 
+var jkflow = [
+  { name: 'Struggle', seconds: 15 * 60, elapsed: 0 },
+  { name: 'Relaxation', seconds: 5 * 60, elapsed: 0 },
+  { name: 'Flow', seconds: 45 * 60, elapsed: 0 },
+  { name: 'Consolidation', seconds: 15 * 60, elapsed: 0 },
+];
+
 
 class Agnda extends React.Component {
   constructor(props) {
@@ -90,6 +97,7 @@ class Agnda extends React.Component {
     this.updateTitle = this.updateTitle.bind(this);
     this.pomodoro = this.pomodoro.bind(this);
     this.hourdoro = this.hourdoro.bind(this);
+    this.jkflow = this.jkflow.bind(this);
     this.reset = this.reset.bind(this);
     this.toTime = this.toTime.bind(this);
     this.handleTopicClick = this.handleTopicClick.bind(this);
@@ -287,6 +295,18 @@ class Agnda extends React.Component {
     });
   }
 
+  jkflow() {
+    this.setState({
+      topics: jkflow
+    });
+    
+    this.setState({
+      currentNumber: 0,
+      name: jkflow[0].name,
+      seconds: jkflow[0].seconds
+    });
+  }
+
   reset() {
     this.setState({
       topics: [
@@ -395,6 +415,10 @@ class Agnda extends React.Component {
             <MenuItem
               onClick={ this.hourdoro }
               label="Hourdoro-ize!" 
+            />
+            <MenuItem
+              onClick={ this.jkflow }
+              label="Jim Kwik - Stages of flow" 
             />
             <MenuItem
               onClick={ this.reset }
