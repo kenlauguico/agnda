@@ -1,3 +1,6 @@
 {
-    "name": "agnda"
+    "name": "agnda",
+    "sidebar": [
+        ["Overview", "/"]
+    ]
 }
