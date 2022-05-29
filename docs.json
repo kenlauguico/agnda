@@ -1,6 +1,7 @@
 {
     "name": "agnda",
     "sidebar": [
-        ["Overview", "/"]
+        ["Overview", "/"],
+        ["The Timer Logic", "/timer.mdx"]
     ]
 }

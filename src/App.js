@@ -85,6 +85,7 @@ class Agnda extends React.Component {
 
       elapsed: 0,
       on: false,
+      stampStart: null,
       interval: null,
       autoTopic: false
     }
@@ -93,7 +94,7 @@ class Agnda extends React.Component {
     this.start = this.start.bind(this);
     this.toggle = this.toggle.bind(this);
     this.stop = this.stop.bind(this);
-    this.updateTime = this.updateTime.bind(this);
+    this.updateTimes = this.updateTimes.bind(this);
     this.updateTitle = this.updateTitle.bind(this);
     this.pomodoro = this.pomodoro.bind(this);
     this.hourdoro = this.hourdoro.bind(this);
@@ -133,40 +134,59 @@ class Agnda extends React.Component {
   
   
   start() {
-    let interval = setInterval(this.updateTime, 1000);
+    let interval = setInterval(this.updateTimes, 1000);
     
     this.setState({
       on: true,
+      stampStart: Date.now(),
       interval: interval
     });
   }
   
-  updateTime() {    
-    const currentNumber = this.state.currentNumber;
-    let topic = this.state.topics[currentNumber];
-    
-    topic.elapsed += 1;
-    
-    this.state.topics[currentNumber] = topic;
-    
-    this.setState({
-      elapsed: this.state.elapsed+1
-    });
+  updateTimes() {    
+    const currentIndex = this.state.currentNumber;
+    let currentTopic = this.state.topics[currentIndex];
+    let stampNow = Date.now()
+    const actualElapsed = Math.round((stampNow-this.state.stampStart)/1000)
 
+    // updated elapsed counter
+    currentTopic.elapsed += actualElapsed;
+
+    console.log("currentTopic.elapsed")
+    console.log(currentTopic.elapsed)
+    console.log("this.state.elapsed")
+    console.log(this.state.elapsed)
+    console.log("this.state.stampStart")
+    console.log(this.state.stampStart)
+
+    // set current topic
+    this.state.topics[currentIndex] = currentTopic;
+
+    // updateStamp after addition
+    this.setState({
+      elapsed: actualElapsed,
+      stampStart: Date.now()
+    })
+    // will change topics if elapsed is at the end of the topic
+    this.autoChangeTopic();
+    // update the title according to the current elapsed time
     this.updateTitle();
-    
-    if (this.state.autoTopic)
-      this.shouldChangeTopic();
   }
 
   updateTitle() {
-    let totalSeconds = 0;
+    let totalDuration = 0;
 
-    for (var k in this.state.topics) {
-      totalSeconds += this.state.topics[k].seconds;
-    }
+    // count duration total
+    for (var k in this.state.topics)
+      totalDuration += this.state.topics[k].seconds;
 
-    if (totalSeconds > 0) document.title = this.toTime(totalSeconds);
+    if (totalDuration > 0)
+      document.title = this.toTime(totalDuration) + " session | AGNDA";
+  }
+
+  autoChangeTopic() {
+    if (this.state.autoTopic)
+      this.shouldChangeTopic();
   }
   
   shouldChangeTopic() {
@@ -181,7 +201,9 @@ class Agnda extends React.Component {
         this.setState({
           currentNumber: currentNumber,
           name: nextTopic.name,
-          seconds: nextTopic.seconds
+          seconds: nextTopic.seconds,
+          elapsed: nextTopic.elapsed,
+          stampStart: Date.now()
         });
       } else {
         this.stop;
@@ -197,6 +219,7 @@ class Agnda extends React.Component {
     clearInterval(this.state.interval);
     this.setState({
       on: false,
+      stampStart: null,
       interval: null
     });
   }
@@ -208,6 +231,23 @@ class Agnda extends React.Component {
       name: topic.name,
       seconds: topic.seconds,
     });
+  }
+
+  syncElapsed() {
+    const stampNow = Date.now()
+    const actualElapsed = (stampNow-this.state.stampStart)/1000
+
+    const currentIndex = this.state.currentNumber;
+    let currentTopic = this.state.topics[currentIndex];
+
+    currentTopic.elapsed += Math.round(actualElapsed)
+
+    if (currentTopic.elapsed > this.state.elapsed) {
+      this.setState({
+        elapsed: currentTopic.elapsed,
+        stampStart: Date.now()
+      });
+    }
   }
   
   buildAgenda() {
@@ -236,7 +276,7 @@ class Agnda extends React.Component {
     }) - 1;
     
     this.setState({
-      topics: topics,
+      topics: topics
     });
     
     let topic = topics[currentNumber];
@@ -244,7 +284,8 @@ class Agnda extends React.Component {
     this.setState({
       currentNumber: currentNumber,
       name: topic.name,
-      seconds: topic.seconds
+      seconds: topic.seconds,
+      elapsed: 0
     });
 
     this.editorInput.focus();
@@ -256,13 +297,18 @@ class Agnda extends React.Component {
     
     topics.splice(this.state.currentNumber, 1);
     
-    currentNumber -= 1;
+    currentNumber -= currentNumber ? 1 : 0;
     
     const currentTopic = topics[currentNumber];
     
     this.setState({
       topics: topics,
     });
+
+    console.log("currentNumber")
+    console.log(currentNumber)
+    console.log("currentTopic")
+    console.log(currentTopic)
     
     this.setState({
       currentNumber: currentNumber,
@@ -333,19 +379,23 @@ class Agnda extends React.Component {
     let seconds = (secs == 1) ? secs + " second" : secs + "-second";
 
     if (mins < 1)
-      return seconds + " session";
+      return seconds;
     else if (secs > 0)
-      return minutes + " and " + seconds + " session";
+      return minutes + " and " + seconds;
     else
-      return minutes + " session";
+      return minutes;
   }
   
   
   handleTopicClick(topic, index) {
+    if (index === this.state.currentNumber) return
+    
     this.setState({
       currentNumber: index,
       name: topic.name,
-      seconds: topic.seconds
+      seconds: topic.seconds,
+      elapsed: topic.elapsed,
+      stampStart: Date.now()
     });
   }
   
