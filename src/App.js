@@ -75,7 +75,8 @@ class Agnda extends React.Component {
       }
     }
 
-    this.state = {
+    var saved = localStorage.getItem('saved');
+    this.state = saved ? JSON.parse(saved) : {
       topics: topics,
 
       // Currently Selected/Focused Topic
@@ -89,7 +90,6 @@ class Agnda extends React.Component {
       interval: null,
       autoTopic: false
     }
-    
 
     this.start = this.start.bind(this);
     this.toggle = this.toggle.bind(this);
@@ -126,6 +126,10 @@ class Agnda extends React.Component {
   
   componentDidMount() {
     document.addEventListener('keydown', this.handleKeyPress);
+    if (this.state.on) {
+      this.updateTimes()
+      this.start()
+    }
   }
   
   componentWillUnmount() {
@@ -171,6 +175,8 @@ class Agnda extends React.Component {
     this.autoChangeTopic();
     // update the title according to the current elapsed time
     this.updateTitle();
+
+    localStorage.setItem('saved', JSON.stringify(this.state));
   }
 
   updateTitle() {
