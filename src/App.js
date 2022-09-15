@@ -1,12 +1,10 @@
-import React, { Component } from 'react';
+import React from 'react';
 import './App.css';
 import { AgndTopic } from './agndtopic';
 import { Duration } from './duration';
-
 import { Input, ButtonGroup, ButtonIcon, ButtonMenu, MenuItem } from 'react-rainbow-components';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlay, faPause, faPlus, faMinus, faAngleDown } from '@fortawesome/free-solid-svg-icons';
-
 
 
 var pomodoro = [
@@ -58,7 +56,7 @@ class Agnda extends React.Component {
     for (var i=0; i<hashes.length; i++) {
       let name = decodeURI(hashes[i].replace('#',''));
 
-      if (i==0 && name>=5) {
+      if (i==0 && name>=1) {
         minuteLocked = true;
         duration = name;
         continue;
