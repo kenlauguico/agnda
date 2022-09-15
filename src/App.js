@@ -100,6 +100,7 @@ class Agnda extends React.Component {
     this.jkflow = this.jkflow.bind(this);
     this.reset = this.reset.bind(this);
     this.toTime = this.toTime.bind(this);
+    this.toNumberTime = this.toNumberTime.bind(this);
     this.handleTopicClick = this.handleTopicClick.bind(this);
     this.handleEditName = this.handleEditName.bind(this);
     this.handleEditTime = this.handleEditTime.bind(this);
@@ -137,6 +138,7 @@ class Agnda extends React.Component {
   
   
   start() {
+    clearInterval(this.state.interval)
     let interval = setInterval(this.updateTimes, 1000);
     
     this.setState({
@@ -180,13 +182,19 @@ class Agnda extends React.Component {
 
   updateTitle() {
     let totalDuration = 0;
+    let totalElapsed = 0
 
     // count duration total
     for (var k in this.state.topics)
       totalDuration += this.state.topics[k].seconds;
+    
+    for (var i in this.state.topics)
+      totalElapsed += this.state.topics[i].elapsed
 
     if (totalDuration > 0)
-      document.title = this.toTime(totalDuration) + " session | AGNDA";
+      document.title = 
+      this.toNumberTime(totalElapsed) + " / " +
+      this.toTime(totalDuration) + " session | AGNDA";
   }
 
   autoChangeTopic() {
@@ -389,6 +397,13 @@ class Agnda extends React.Component {
       return minutes + " and " + seconds;
     else
       return minutes;
+  }
+
+  toNumberTime(seconds) {
+    const mins = Math.floor( seconds / 60 );
+    let secs = seconds % 60;
+    secs = (secs < 10) ? ("0" + secs) : secs;
+    return mins + ":" + secs;
   }
   
   
