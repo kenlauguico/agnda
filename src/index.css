@@ -97,17 +97,20 @@ label {
 }
 
 
-.ant-progress {
-  margin-bottom: 1em;
-}
-
 .ant-progress-inner {
   position: relative;
+  margin-bottom: 1em;
 }
 
 span.ant-progress-text {
   position: relative;
-  top: -77px;
+  top: -200px;
   font-size: small;
   cursor: pointer;
+  min-height: 100%;
+  display: inline-grid;
+}
+
+.ant-progress-text div:first-of-type {
+  align-self: self-end;
 }

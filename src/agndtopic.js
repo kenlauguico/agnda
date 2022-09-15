@@ -20,33 +20,22 @@ export class AgndTopic extends React.Component {
     const isLast = this.props.isLast;
     const prcnt = (this.props.elapsed / this.props.seconds)*100;
     const isOver = this.props.elapsed > this.props.seconds;
+    
     let style = this.props.class + ' topic-item';
-
-    console.log('percent', prcnt)
     
     if (isOver && !style.match('over')) {
       style += ' over';
     }
     
-    // return (
-    //   <button 
-    //     class={style} 
-        // onClick={this.props.onClick} 
-        // onDoubleClick={this.props.onDoubleClick}
-    //     >
-    //     <div>{name}</div>
-    //     <div><span>{elapsed}</span> / <span>{seconds}</span></div>
-    //     { !isLast ? '↓' : '' }
-    //   </button>
-    // );
     return (
       <>
         <Progress 
           class={style}
-          type="circle" 
+          type="circle"
+          width={200}
           strokeColor={ isOver ? 'Crimson' : prcnt > 85 ? 'YellowGreen' : 'DeepSkyBlue'}
           percent={prcnt} 
-          format={() => <><div>{name}</div><div>{elapsed}</div></>} 
+          format={() => <><div style={{fontSize: 'medium', padding: '0 1em'}}>{name}</div><div>{elapsed}</div></>} 
           onClick={this.props.onClick} 
           onDoubleClick={this.props.onDoubleClick}
         />

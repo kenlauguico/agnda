@@ -1,37 +1,10 @@
 import React from 'react';
-import './App.css';
-import { AgndTopic } from './agndtopic';
+import { AgndTopic } from './AgndTopic';
 import { Duration } from './duration';
+import { pomodoro, hourdoro, jkflow } from './templates'
 import { Input, ButtonGroup, ButtonIcon, ButtonMenu, MenuItem } from 'react-rainbow-components';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPlay, faPause, faPlus, faMinus, faAngleDown } from '@fortawesome/free-solid-svg-icons';
-
-
-var pomodoro = [
-  { name: 'Work', seconds: 25 * 60, elapsed: 0 },
-  { name: 'Break', seconds: 5 * 60, elapsed: 0 },
-  { name: 'Work', seconds: 25 * 60, elapsed: 0 },
-  { name: 'Break', seconds: 5 * 60, elapsed: 0 },
-  { name: 'Work', seconds: 25 * 60, elapsed: 0 },
-  { name: 'Break', seconds: 5 * 60, elapsed: 0 },
-  { name: 'Work', seconds: 25 * 60, elapsed: 0 },
-  { name: 'Break', seconds: 15 * 60, elapsed: 0 },
-];
-
-var hourdoro = [
-  { name: 'Warm up', seconds: 5 * 60, elapsed: 0 },
-  { name: 'Get serious', seconds: 10 * 60, elapsed: 0 },
-  { name: 'Deep focus', seconds: 15 * 60, elapsed: 0 },
-  { name: 'Finish task!', seconds: 15 * 60, elapsed: 0 },
-  { name: 'Break', seconds: 15 * 60, elapsed: 0 },
-];
-
-var jkflow = [
-  { name: 'Struggle', seconds: 15 * 60, elapsed: 0 },
-  { name: 'Relaxation', seconds: 5 * 60, elapsed: 0 },
-  { name: 'Flow', seconds: 45 * 60, elapsed: 0 },
-  { name: 'Consolidation', seconds: 15 * 60, elapsed: 0 },
-];
 
 
 class Agnda extends React.Component {
@@ -40,8 +13,8 @@ class Agnda extends React.Component {
 
     let hashes = window.location.hash.split('/');
     if (hashes[0].length == 0) hashes = [];
-    let topics = []
     const noHash = hashes.length == 0
+    let topics = []
 
     if (noHash) {
      topics = [
@@ -74,8 +47,8 @@ class Agnda extends React.Component {
       }
     }
 
-    var saved = localStorage.getItem('saved');
-    this.state = saved && noHash ? JSON.parse(saved) : {
+    var saved = localStorage.getItem(window.location);
+    this.state = saved ? JSON.parse(saved) : {
       topics: topics,
 
       // Currently Selected/Focused Topic
@@ -94,6 +67,7 @@ class Agnda extends React.Component {
     this.toggle = this.toggle.bind(this);
     this.stop = this.stop.bind(this);
     this.updateTimes = this.updateTimes.bind(this);
+    this.saveThisState = this.saveThisState.bind(this);
     this.updateTitle = this.updateTitle.bind(this);
     this.pomodoro = this.pomodoro.bind(this);
     this.hourdoro = this.hourdoro.bind(this);
@@ -114,12 +88,14 @@ class Agnda extends React.Component {
 
 
   handleKeyPress(e) {
+    e.preventDefault()
     this.setState({currentKey: e.keyCode});
 
     if (e.target.type == 'text') return;
 
     if(e.keyCode === 32) {
       this.toggle();
+      this.saveThisState()
       console.log('space pressed!');
     }
   }
@@ -177,7 +153,12 @@ class Agnda extends React.Component {
     // update the title according to the current elapsed time
     this.updateTitle();
 
-    localStorage.setItem('saved', JSON.stringify(this.state));
+    // save state to local storage
+    this.saveThisState()
+  }
+
+  saveThisState() {
+    localStorage.setItem(window.location, JSON.stringify(this.state));
   }
 
   updateTitle() {
@@ -368,11 +349,7 @@ class Agnda extends React.Component {
 
   reset() {
     this.setState({
-      topics: [
-        { name: "Introductions", seconds: 5 * 60, elapsed: 0},
-        { name: "Discussion", seconds: 10 * 60, elapsed: 0},
-        { name: "Open Forum", seconds: 5 * 60, elapsed: 0},
-      ]
+      topics: this.state.topics.map(topic => ({...topic, elapsed: 0}))
     });
     
     this.setState({
