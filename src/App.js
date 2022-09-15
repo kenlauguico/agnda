@@ -88,12 +88,12 @@ class Agnda extends React.Component {
 
 
   handleKeyPress(e) {
-    e.preventDefault()
     this.setState({currentKey: e.keyCode});
 
     if (e.target.type == 'text') return;
 
     if(e.keyCode === 32) {
+      e.preventDefault()
       this.toggle();
       this.saveThisState()
       console.log('space pressed!');
