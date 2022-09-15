@@ -41,8 +41,9 @@ class Agnda extends React.Component {
     let hashes = window.location.hash.split('/');
     if (hashes[0].length == 0) hashes = [];
     let topics = []
+    const noHash = hashes.length == 0
 
-    if (hashes.length == 0) {
+    if (noHash) {
      topics = [
         { name: "LET'S", seconds: 5 * 60, elapsed: 0},
         { name: "MAKE", seconds: 10 * 60, elapsed: 0},
@@ -74,7 +75,7 @@ class Agnda extends React.Component {
     }
 
     var saved = localStorage.getItem('saved');
-    this.state = saved ? JSON.parse(saved) : {
+    this.state = saved && noHash ? JSON.parse(saved) : {
       topics: topics,
 
       // Currently Selected/Focused Topic
