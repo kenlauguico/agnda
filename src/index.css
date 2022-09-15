@@ -10,7 +10,7 @@ body {
 }
 
 .agenda {
-  text-align: center;
+  text-align: -webkit-center;
   margin: 3em;
 }
  
@@ -40,16 +40,14 @@ button {
   background-color: transparent;
 }
 
-button.topic-item {
+.topic-item {
   border: none;
   border-radius: 0px;
   margin: 0.5em 0;
 }
 
-button.selected {
+.selected {
   font-weight: bold;
-  /*margin: 1em 0;*/
-  font-size: 2em;
 }
 
 button.over {
@@ -96,4 +94,20 @@ input[type=text] {
 label {
   font-family: Arial;
   font-size: 1em;
+}
+
+
+.ant-progress {
+  margin-bottom: 1em;
+}
+
+.ant-progress-inner {
+  position: relative;
+}
+
+span.ant-progress-text {
+  position: relative;
+  top: -77px;
+  font-size: small;
+  cursor: pointer;
 }

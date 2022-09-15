@@ -1,4 +1,5 @@
 import React, { Component } from 'react';
+import { Progress } from 'antd';
 
 export class AgndTopic extends React.Component {
   constructor(props) {
@@ -17,18 +18,39 @@ export class AgndTopic extends React.Component {
     const elapsed = this.toTime(this.props.elapsed);
     const seconds = this.toTime(this.props.seconds);
     const isLast = this.props.isLast;
+    const prcnt = (this.props.elapsed / this.props.seconds)*100;
+    const isOver = this.props.elapsed > this.props.seconds;
     let style = this.props.class + ' topic-item';
+
+    console.log('percent', prcnt)
     
-    if (this.props.elapsed > this.props.seconds && !style.match('over')) {
+    if (isOver && !style.match('over')) {
       style += ' over';
     }
     
+    // return (
+    //   <button 
+    //     class={style} 
+        // onClick={this.props.onClick} 
+        // onDoubleClick={this.props.onDoubleClick}
+    //     >
+    //     <div>{name}</div>
+    //     <div><span>{elapsed}</span> / <span>{seconds}</span></div>
+    //     { !isLast ? '↓' : '' }
+    //   </button>
+    // );
     return (
-      <button class={style} onClick={this.props.onClick} onDoubleClick={this.props.onDoubleClick}>
-        <div>{name}</div>
-        <div><span>{elapsed}</span> / <span>{seconds}</span></div>
-        { !isLast ? '↓' : '' }
-      </button>
-    );
+      <>
+        <Progress 
+          class={style}
+          type="circle" 
+          strokeColor={isOver ? 'Crimson' : 'DeepSkyBlue'}
+          percent={prcnt} 
+          format={() => <><div>{name}</div><div>{elapsed}</div></>} 
+          onClick={this.props.onClick} 
+          onDoubleClick={this.props.onDoubleClick}
+        />
+      </>
+    )
   }
 }
