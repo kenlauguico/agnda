@@ -44,7 +44,7 @@ export class AgndTopic extends React.Component {
         <Progress 
           class={style}
           type="circle" 
-          strokeColor={isOver ? 'Crimson' : 'DeepSkyBlue'}
+          strokeColor={ isOver ? 'Crimson' : prcnt > 85 ? 'YellowGreen' : 'DeepSkyBlue'}
           percent={prcnt} 
           format={() => <><div>{name}</div><div>{elapsed}</div></>} 
           onClick={this.props.onClick} 
