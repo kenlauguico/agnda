@@ -98,6 +98,13 @@ class Agnda extends React.Component {
       this.saveThisState()
       console.log('space pressed!');
     }
+
+    if ((e.ctrlKey || e.metaKey) && (e.keyCode == 86)) {
+      navigator.clipboard.readText().then(text => {
+        var topics = text.split('\n').map(topic => ({ name: topic, seconds: 5 * 60, elapsed: 0}))
+        this.setState({topics})
+      })
+    }
   }
   
   componentDidMount() {
