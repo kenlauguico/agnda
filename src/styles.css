@@ -147,6 +147,13 @@ input {
   margin-bottom: 0.8rem;
 }
 
+.agenda-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
 .agenda-panel h2,
 .editor-panel h2 {
   margin: 0;
@@ -227,6 +234,11 @@ input {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.5rem;
+}
+
+.saved-urls-toggle {
+  flex: 0 0 auto;
+  min-width: 130px;
 }
 
 .saved-urls-panel {
@@ -405,5 +417,10 @@ input:focus-visible {
 
   .domain-row {
     justify-content: flex-start;
+  }
+
+  .agenda-header-row {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

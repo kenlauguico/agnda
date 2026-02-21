@@ -478,8 +478,15 @@ export default function App() {
       <section className="workspace">
         <aside className="agenda-panel">
           <header>
-            <h2>Agenda</h2>
-            <p>Space to start/pause. Cmd/Ctrl+N to add.</p>
+            <div className="agenda-header-row">
+              <div>
+                <h2>Agenda</h2>
+                <p>Space to start/pause. Cmd/Ctrl+N to add.</p>
+              </div>
+              <button type="button" className="saved-urls-toggle" onClick={toggleSavedUrls}>
+                {showSavedUrls ? 'Hide Sidebar' : 'Show Sidebar'}
+              </button>
+            </div>
           </header>
 
           <div className="topic-list" role="list" aria-label="Agenda topics">
@@ -516,9 +523,6 @@ export default function App() {
             <button type="button" onClick={addTopic}>Add</button>
             <button type="button" onClick={removeCurrentTopic}>Delete</button>
             <button type="button" onClick={resetElapsedTimes}>Zero elapsed</button>
-            <button type="button" onClick={toggleSavedUrls}>
-              {showSavedUrls ? 'Hide saved URLs' : 'Saved URLs'}
-            </button>
           </div>
 
           {showSavedUrls ? (
