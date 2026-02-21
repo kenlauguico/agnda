@@ -136,6 +136,7 @@ export function buildInitialState(topics) {
     currentIndex: 0,
     autoAdvance: false,
     isRunning: false,
+    timelineCursorSeconds: 0,
     comments: [],
   };
 }
@@ -159,6 +160,15 @@ export function migrateStateRecord(record, fallbackTopics = instantiateTopics(DE
     topics,
     currentIndex,
     autoAdvance: toBoolean(record.autoAdvance ?? record.autoTopic ?? false),
+    timelineCursorSeconds: Math.max(
+      0,
+      Math.round(
+        toSafeNumber(
+          record.timelineCursorSeconds,
+          topics.reduce((sum, topic) => sum + toSafeNumber(topic.elapsed, 0), 0),
+        ),
+      ),
+    ),
     comments: normalizeComments(record.comments),
     // We intentionally pause legacy sessions on migration to avoid multi-day drift.
     isRunning:
@@ -197,6 +207,15 @@ export function loadInitialState(storage = globalThis.window?.localStorage, hash
     return buildInitialState(hashTopics);
   }
 
+  const currentLocationLegacy = loadLegacyState(
+    storage,
+    instantiateTopics(DEFAULT_TOPICS),
+    true,
+  );
+  if (currentLocationLegacy) {
+    return currentLocationLegacy;
+  }
+
   const modern = migrateStateRecord(readJSON(storage, STORAGE_KEY));
   if (modern) {
     return modern;
@@ -226,6 +245,7 @@ export function saveState(state, storage = globalThis.window?.localStorage) {
     currentIndex: clampIndex(state?.currentIndex ?? 0, topics.length),
     autoAdvance: toBoolean(state?.autoAdvance),
     isRunning: toBoolean(state?.isRunning),
+    timelineCursorSeconds: Math.max(0, Math.round(toSafeNumber(state?.timelineCursorSeconds, 0))),
     comments: normalizeComments(state?.comments),
   };
 

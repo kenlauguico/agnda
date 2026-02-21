@@ -10,19 +10,17 @@ import {
 import { clampIndex, formatClock, minutesFromSeconds } from './lib/time';
 import './styles.css';
 
-const ZOOM_LEVELS = Object.freeze([
-  { id: '5m', label: '5m', tickSeconds: 5 * 60 },
-  { id: '10m', label: '10m', tickSeconds: 10 * 60 },
-  { id: '30m', label: '30m', tickSeconds: 30 * 60 },
-  { id: '1h', label: '1h', tickSeconds: 60 * 60 },
+const RESOLUTION_LEVELS = Object.freeze([
+  { label: '30s', seconds: 30 },
+  { label: '1m', seconds: 60 },
+  { label: '1h', seconds: 3600 },
 ]);
 
-const DEFAULT_ZOOM_ID = '10m';
-const PIXELS_PER_TICK = 72;
-
-function getZoomLevel(zoomId) {
-  return ZOOM_LEVELS.find((zoom) => zoom.id === zoomId) || ZOOM_LEVELS[1];
-}
+const DEFAULT_RESOLUTION_INDEX = 1;
+const PIXELS_PER_RESOLUTION_STEP = 64;
+const LANE_TOP = 26;
+const ROW_HEIGHT = 38;
+const COMMENT_LANE_SPACING = 26;
 
 function isEditableTarget(target) {
   if (!(target instanceof HTMLElement)) {
@@ -41,20 +39,131 @@ function createCommentId() {
   return `comment-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function buildTimelineSegments(topics) {
-  let cursor = 0;
+function getSavedUrlEntries() {
+  if (!globalThis.window || !window.localStorage) {
+    return [];
+  }
 
-  return topics.map((topic, index) => {
-    const start = cursor;
-    cursor += topic.seconds;
+  const currentUrl = window.location.href;
+  const currentPathUrl = `${window.location.origin}${window.location.pathname}`;
 
-    return {
-      ...topic,
-      index,
-      start,
-      end: cursor,
-    };
+  const entries = [];
+
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (!key || !/^https?:\/\//i.test(key)) {
+      continue;
+    }
+
+    if (key === currentUrl || key === currentPathUrl || key === `${currentPathUrl}/`) {
+      continue;
+    }
+
+    let topicCount = null;
+    try {
+      const payload = JSON.parse(window.localStorage.getItem(key) || 'null');
+      if (Array.isArray(payload?.topics)) {
+        topicCount = payload.topics.length;
+      }
+    } catch {
+      topicCount = null;
+    }
+
+    entries.push({ key, topicCount });
+  }
+
+  return entries.sort((a, b) => a.key.localeCompare(b.key));
+}
+
+function buildLayoutTopics(topics) {
+  const rowById = {};
+  const rowEndTimes = [];
+
+  const sorted = [...topics].sort((a, b) => {
+    const byStart = a.startSeconds - b.startSeconds;
+    if (byStart !== 0) {
+      return byStart;
+    }
+
+    return b.seconds - a.seconds;
   });
+
+  sorted.forEach((topic) => {
+    const start = Math.max(0, Number(topic.startSeconds) || 0);
+    const end = start + (Number(topic.seconds) || 0);
+
+    let row = 0;
+    while ((rowEndTimes[row] ?? -Infinity) > start) {
+      row += 1;
+    }
+
+    rowById[topic.id] = row;
+    rowEndTimes[row] = end;
+  });
+
+  return topics.map((topic, index) => ({
+    ...topic,
+    index,
+    row: rowById[topic.id] ?? 0,
+    endSeconds: topic.startSeconds + topic.seconds,
+  }));
+}
+
+function getMaxEndSeconds(topics) {
+  return topics.reduce(
+    (max, topic) => Math.max(max, (Number(topic.startSeconds) || 0) + (Number(topic.seconds) || 0)),
+    0,
+  );
+}
+
+function snapStartSeconds(rawStartSeconds, movingTopicId, topics, tickSeconds) {
+  const raw = Math.max(0, Number(rawStartSeconds) || 0);
+  const snappedTick = Math.round(raw / tickSeconds) * tickSeconds;
+
+  let best = snappedTick;
+  let bestDistance = Math.abs(raw - snappedTick);
+  const maxSnapDistance = Math.max(tickSeconds, 60);
+
+  topics.forEach((topic) => {
+    if (topic.id === movingTopicId) {
+      return;
+    }
+
+    const candidateStarts = [topic.startSeconds, topic.startSeconds + topic.seconds];
+    candidateStarts.forEach((candidate) => {
+      const distance = Math.abs(raw - candidate);
+      if (distance <= maxSnapDistance && distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    });
+  });
+
+  return Math.max(0, Math.round(best));
+}
+
+function appendWorkHistory(history, fromCursor, toCursor) {
+  if (toCursor <= fromCursor) {
+    return Array.isArray(history) ? history : [];
+  }
+
+  const nextHistory = Array.isArray(history) ? [...history] : [];
+  const workedSeconds = toCursor - fromCursor;
+  const lastEntry = nextHistory[nextHistory.length - 1];
+
+  if (lastEntry && lastEntry.toCursor === fromCursor) {
+    lastEntry.toCursor = toCursor;
+    lastEntry.workedSeconds = lastEntry.toCursor - lastEntry.fromCursor;
+    return nextHistory;
+  }
+
+  nextHistory.push({
+    fromCursor,
+    toCursor,
+    workedSeconds,
+  });
+
+  return nextHistory;
 }
 
 function advanceBySeconds(previous, deltaSeconds) {
@@ -63,6 +172,8 @@ function advanceBySeconds(previous, deltaSeconds) {
   }
 
   const currentIndex = clampIndex(previous.currentIndex, previous.topics.length);
+  const fromCursor = Math.max(0, Math.round(previous.timelineCursorSeconds || 0));
+  const toCursor = fromCursor + deltaSeconds;
 
   const nextTopics = previous.topics.map((topic, index) => {
     if (index !== currentIndex) {
@@ -72,16 +183,17 @@ function advanceBySeconds(previous, deltaSeconds) {
     return {
       ...topic,
       elapsed: topic.elapsed + deltaSeconds,
+      lastWorkedCursor: toCursor,
+      workHistory: appendWorkHistory(topic.workHistory, fromCursor, toCursor),
     };
   });
 
-  let nextIndex = currentIndex;
   let nextRunning = previous.isRunning;
+  let nextIndex = currentIndex;
 
   if (previous.autoAdvance) {
-    const activeTopic = nextTopics[currentIndex];
-
-    if (activeTopic && activeTopic.elapsed >= activeTopic.seconds) {
+    const active = nextTopics[currentIndex];
+    if (active && active.elapsed >= active.seconds) {
       if (currentIndex < nextTopics.length - 1) {
         nextIndex = currentIndex + 1;
       } else {
@@ -95,31 +207,57 @@ function advanceBySeconds(previous, deltaSeconds) {
     topics: nextTopics,
     currentIndex: nextIndex,
     isRunning: nextRunning,
+    timelineCursorSeconds: toCursor,
   };
 }
 
 export default function App() {
   const [state, setState] = useState(() => loadInitialState());
-  const [zoomId, setZoomId] = useState(DEFAULT_ZOOM_ID);
+  const [resolutionIndex, setResolutionIndex] = useState(DEFAULT_RESOLUTION_INDEX);
+  const [selectedTopicId, setSelectedTopicId] = useState(null);
+  const [armedSwapTopicId, setArmedSwapTopicId] = useState(null);
   const [commentDraft, setCommentDraft] = useState('');
   const [isCommentComposerOpen, setIsCommentComposerOpen] = useState(false);
   const [openCommentId, setOpenCommentId] = useState(null);
   const [insertStatus, setInsertStatus] = useState('');
   const [timelineFrameWidth, setTimelineFrameWidth] = useState(0);
+  const [showUrlMenu, setShowUrlMenu] = useState(false);
+  const [savedUrlEntries, setSavedUrlEntries] = useState([]);
 
   const tickerRef = useRef({ intervalId: null, lastTickMs: Date.now() });
   const timelineFrameRef = useRef(null);
   const commentInputRef = useRef(null);
   const insertStatusTimeoutRef = useRef(null);
+  const dragRef = useRef({
+    topicId: null,
+    startClientX: 0,
+    originStartSeconds: 0,
+    moved: false,
+  });
 
   const topics = state.topics;
   const currentIndex = clampIndex(state.currentIndex, topics.length);
   const currentTopic = topics[currentIndex];
   const comments = Array.isArray(state.comments) ? state.comments : [];
 
-  const totalDurationSeconds = useMemo(
-    () => topics.reduce((sum, topic) => sum + topic.seconds, 0),
-    [topics],
+  const layoutTopics = useMemo(() => buildLayoutTopics(topics), [topics]);
+
+  const selectedTopic = useMemo(() => {
+    if (!selectedTopicId) {
+      return currentTopic;
+    }
+
+    return topics.find((topic) => topic.id === selectedTopicId) || currentTopic;
+  }, [selectedTopicId, topics, currentTopic]);
+
+  const selectedTopicIndex = useMemo(
+    () => topics.findIndex((topic) => topic.id === selectedTopic?.id),
+    [topics, selectedTopic],
+  );
+
+  const rowCount = useMemo(
+    () => Math.max(1, layoutTopics.reduce((max, topic) => Math.max(max, topic.row + 1), 0)),
+    [layoutTopics],
   );
 
   const totalElapsedSeconds = useMemo(
@@ -127,20 +265,59 @@ export default function App() {
     [topics],
   );
 
-  const timelineSegments = useMemo(() => buildTimelineSegments(topics), [topics]);
+  const timelineCursorSeconds = Math.max(0, Math.round(state.timelineCursorSeconds || 0));
+  const resolution = RESOLUTION_LEVELS[resolutionIndex] || RESOLUTION_LEVELS[1];
+  const pixelsPerSecond = PIXELS_PER_RESOLUTION_STEP / resolution.seconds;
+
+  const maxEndSeconds = useMemo(
+    () => Math.max(getMaxEndSeconds(topics), timelineCursorSeconds + resolution.seconds * 4, resolution.seconds * 6),
+    [topics, timelineCursorSeconds, resolution.seconds],
+  );
+
+  const trackWidth = Math.max(
+    maxEndSeconds * pixelsPerSecond,
+    (timelineFrameWidth || 700) + PIXELS_PER_RESOLUTION_STEP * 6,
+  );
+
+  const translateX = (timelineFrameWidth || 700) / 2 - timelineCursorSeconds * pixelsPerSecond;
+
+  const tickStepSeconds = resolution.seconds === 3600 ? 3600 : 30;
+  const tickLabelEverySeconds = resolution.seconds === 3600 ? 3600 : 60;
+  const tickCount = Math.ceil(maxEndSeconds / tickStepSeconds) + 1;
+
+  const ticks = useMemo(
+    () =>
+      Array.from({ length: tickCount }, (_, index) => {
+        const second = index * tickStepSeconds;
+        const isMajor = second % tickLabelEverySeconds === 0;
+
+        return {
+          second,
+          x: second * pixelsPerSecond,
+          isMajor,
+          label: isMajor ? formatClock(second) : '',
+        };
+      }),
+    [tickCount, tickStepSeconds, tickLabelEverySeconds, pixelsPerSecond],
+  );
 
   const nextUntouchedTopics = useMemo(
-    () => topics.slice(currentIndex + 1).filter((topic) => topic.elapsed === 0),
-    [topics, currentIndex],
+    () =>
+      [...layoutTopics]
+        .filter((topic) => topic.elapsed === 0 && topic.startSeconds >= timelineCursorSeconds)
+        .sort((a, b) => a.startSeconds - b.startSeconds),
+    [layoutTopics, timelineCursorSeconds],
   );
 
   const unfinishedTopics = useMemo(
     () =>
-      topics.filter(
-        (topic, index) =>
-          index !== currentIndex && topic.elapsed < topic.seconds,
-      ),
-    [topics, currentIndex],
+      layoutTopics
+        .filter(
+          (topic) =>
+            topic.elapsed > 0 && topic.elapsed < topic.seconds && topic.id !== currentTopic?.id,
+        )
+        .sort((a, b) => (b.lastWorkedCursor || 0) - (a.lastWorkedCursor || 0)),
+    [layoutTopics, currentTopic],
   );
 
   const sortedComments = useMemo(
@@ -149,43 +326,13 @@ export default function App() {
   );
 
   const activeLiveComment = useMemo(() => {
-    const passed = sortedComments.filter((comment) => comment.atSeconds <= totalElapsedSeconds);
+    const passed = sortedComments.filter((comment) => comment.atSeconds <= timelineCursorSeconds);
     return passed.length ? passed[passed.length - 1] : null;
-  }, [sortedComments, totalElapsedSeconds]);
+  }, [sortedComments, timelineCursorSeconds]);
 
   const upcomingLiveComment = useMemo(
-    () => sortedComments.find((comment) => comment.atSeconds > totalElapsedSeconds) || null,
-    [sortedComments, totalElapsedSeconds],
-  );
-
-  const zoomLevel = getZoomLevel(zoomId);
-  const pixelsPerSecond = PIXELS_PER_TICK / zoomLevel.tickSeconds;
-
-  const maxTimelineSeconds = Math.max(
-    totalDurationSeconds,
-    totalElapsedSeconds + zoomLevel.tickSeconds * 2,
-    zoomLevel.tickSeconds * 8,
-  );
-
-  const trackWidth = Math.max(
-    maxTimelineSeconds * pixelsPerSecond,
-    (timelineFrameWidth || 700) + PIXELS_PER_TICK * 5,
-  );
-
-  const translateX = (timelineFrameWidth || 700) / 2 - totalElapsedSeconds * pixelsPerSecond;
-
-  const tickCount = Math.ceil(maxTimelineSeconds / zoomLevel.tickSeconds) + 1;
-  const ticks = useMemo(
-    () =>
-      Array.from({ length: tickCount }, (_, index) => {
-        const second = index * zoomLevel.tickSeconds;
-        return {
-          second,
-          x: second * pixelsPerSecond,
-          label: formatClock(second),
-        };
-      }),
-    [tickCount, zoomLevel.tickSeconds, pixelsPerSecond],
+    () => sortedComments.find((comment) => comment.atSeconds > timelineCursorSeconds) || null,
+    [sortedComments, timelineCursorSeconds],
   );
 
   useEffect(() => {
@@ -194,26 +341,24 @@ export default function App() {
       return;
     }
 
-    if (currentIndex !== state.currentIndex) {
-      setState((previous) => ({
-        ...previous,
-        currentIndex,
-      }));
+    if (!selectedTopicId) {
+      setSelectedTopicId(topics[currentIndex]?.id || null);
+      return;
     }
-  }, [topics.length, currentIndex, state.currentIndex]);
+
+    if (!topics.some((topic) => topic.id === selectedTopicId)) {
+      setSelectedTopicId(topics[currentIndex]?.id || null);
+      setArmedSwapTopicId(null);
+    }
+  }, [topics, currentIndex, selectedTopicId]);
 
   useEffect(() => {
     saveState(state);
   }, [state]);
 
   useEffect(() => {
-    if (!totalDurationSeconds) {
-      document.title = 'Ganttimer | AGNDA';
-      return;
-    }
-
-    document.title = `${formatClock(totalElapsedSeconds)} / ${formatClock(totalDurationSeconds)} | Ganttimer`;
-  }, [totalDurationSeconds, totalElapsedSeconds]);
+    document.title = `Ganttimer ${formatClock(timelineCursorSeconds)} | AGNDA`;
+  }, [timelineCursorSeconds]);
 
   useEffect(() => {
     if (!state.isRunning) {
@@ -229,7 +374,6 @@ export default function App() {
     tickerRef.current.intervalId = window.setInterval(() => {
       const now = Date.now();
       const deltaSeconds = Math.floor((now - tickerRef.current.lastTickMs) / 1000);
-
       if (deltaSeconds < 1) {
         return;
       }
@@ -247,14 +391,14 @@ export default function App() {
   }, [state.isRunning]);
 
   useEffect(() => {
-    function updateWidth() {
+    function updateTimelineWidth() {
       setTimelineFrameWidth(timelineFrameRef.current?.clientWidth || 0);
     }
 
-    updateWidth();
-    window.addEventListener('resize', updateWidth);
+    updateTimelineWidth();
+    window.addEventListener('resize', updateTimelineWidth);
 
-    return () => window.removeEventListener('resize', updateWidth);
+    return () => window.removeEventListener('resize', updateTimelineWidth);
   }, []);
 
   useEffect(() => {
@@ -275,7 +419,9 @@ export default function App() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') {
         event.preventDefault();
         setState((previous) => {
-          const nextTopics = [...previous.topics, createTopicFromMinutes('New topic', 5)];
+          const nextStart = getMaxEndSeconds(previous.topics);
+          const newTopic = createTopicFromMinutes('New topic', 5, 0, { startSeconds: nextStart });
+          const nextTopics = [...previous.topics, newTopic];
           return {
             ...previous,
             topics: nextTopics,
@@ -293,7 +439,7 @@ export default function App() {
         event.preventDefault();
         setIsCommentComposerOpen(true);
         setCommentDraft((previous) => {
-          if (!isCommentComposerOpen && !previous.length) {
+          if (!previous.length) {
             return event.key;
           }
 
@@ -302,14 +448,15 @@ export default function App() {
 
         window.requestAnimationFrame(() => {
           commentInputRef.current?.focus();
-          commentInputRef.current?.setSelectionRange(commentInputRef.current.value.length, commentInputRef.current.value.length);
+          const caret = commentInputRef.current?.value.length || 0;
+          commentInputRef.current?.setSelectionRange(caret, caret);
         });
       }
     }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isCommentComposerOpen]);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -319,27 +466,10 @@ export default function App() {
     };
   }, []);
 
-  function updateCurrentTopic(updater) {
-    setState((previous) => {
-      if (!previous.topics.length) {
-        return previous;
-      }
-
-      const nextTopics = previous.topics.map((topic, index) =>
-        index === currentIndex ? updater(topic) : topic,
-      );
-
-      return {
-        ...previous,
-        topics: nextTopics,
-      };
-    });
-  }
-
-  function selectTopic(index) {
+  function updateTopicById(topicId, updater) {
     setState((previous) => ({
       ...previous,
-      currentIndex: clampIndex(index, previous.topics.length),
+      topics: previous.topics.map((topic) => (topic.id === topicId ? updater(topic) : topic)),
     }));
   }
 
@@ -359,7 +489,9 @@ export default function App() {
 
   function addTopic() {
     setState((previous) => {
-      const nextTopics = [...previous.topics, createTopicFromMinutes('New topic', 5)];
+      const nextStart = getMaxEndSeconds(previous.topics);
+      const newTopic = createTopicFromMinutes('New topic', 5, 0, { startSeconds: nextStart });
+      const nextTopics = [...previous.topics, newTopic];
       return {
         ...previous,
         topics: nextTopics,
@@ -376,6 +508,7 @@ export default function App() {
       }
 
       const nextTopics = previous.topics.filter((_, index) => index !== currentIndex);
+
       return {
         ...previous,
         topics: nextTopics,
@@ -383,26 +516,170 @@ export default function App() {
         isRunning: false,
       };
     });
+
+    setArmedSwapTopicId(null);
   }
 
-  function updateCurrentTopicName(name) {
-    updateCurrentTopic((topic) => ({
+  function pressTopic(topicId) {
+    if (selectedTopicId !== topicId) {
+      setSelectedTopicId(topicId);
+      setArmedSwapTopicId(null);
+      return;
+    }
+
+    if (topicId !== currentTopic?.id) {
+      setArmedSwapTopicId((previous) => (previous === topicId ? null : topicId));
+    }
+  }
+
+  function swapToTopic(topicId) {
+    setState((previous) => {
+      const nextIndex = previous.topics.findIndex((topic) => topic.id === topicId);
+      if (nextIndex < 0) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        currentIndex: nextIndex,
+        isRunning: true,
+      };
+    });
+
+    setSelectedTopicId(topicId);
+    setArmedSwapTopicId(null);
+  }
+
+  function handleTopicPointerDown(event, topicId) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    if (event.target instanceof HTMLElement && event.target.closest('.topic-play-button')) {
+      return;
+    }
+
+    const topic = topics.find((candidate) => candidate.id === topicId);
+    if (!topic) {
+      return;
+    }
+
+    event.preventDefault();
+
+    dragRef.current = {
+      topicId,
+      startClientX: event.clientX,
+      originStartSeconds: topic.startSeconds,
+      moved: false,
+    };
+
+    function handlePointerMove(moveEvent) {
+      const drag = dragRef.current;
+      if (!drag.topicId) {
+        return;
+      }
+
+      const deltaPx = moveEvent.clientX - drag.startClientX;
+      if (Math.abs(deltaPx) > 3) {
+        dragRef.current.moved = true;
+      }
+
+      const rawStartSeconds = drag.originStartSeconds + deltaPx / pixelsPerSecond;
+
+      setState((previous) => {
+        const movingTopic = previous.topics.find((candidate) => candidate.id === drag.topicId);
+        if (!movingTopic) {
+          return previous;
+        }
+
+        const snappedStart = snapStartSeconds(
+          rawStartSeconds,
+          drag.topicId,
+          previous.topics,
+          resolution.seconds,
+        );
+
+        if (snappedStart === movingTopic.startSeconds) {
+          return previous;
+        }
+
+        return {
+          ...previous,
+          topics: previous.topics.map((candidate) =>
+            candidate.id === drag.topicId
+              ? { ...candidate, startSeconds: snappedStart }
+              : candidate,
+          ),
+        };
+      });
+    }
+
+    function handlePointerUp() {
+      const drag = dragRef.current;
+
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+
+      dragRef.current = {
+        topicId: null,
+        startClientX: 0,
+        originStartSeconds: 0,
+        moved: false,
+      };
+
+      if (!drag.moved && drag.topicId) {
+        pressTopic(drag.topicId);
+      }
+    }
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+  }
+
+  function updateSelectedName(value) {
+    if (!selectedTopic) {
+      return;
+    }
+
+    updateTopicById(selectedTopic.id, (topic) => ({
       ...topic,
-      name,
+      name: value,
     }));
   }
 
-  function updateCurrentTopicMinutes(value) {
+  function updateSelectedMinutes(value) {
+    if (!selectedTopic) {
+      return;
+    }
+
     const minutes = Number(value);
     if (!Number.isFinite(minutes)) {
       return;
     }
 
-    const seconds = Math.max(1, Math.round(minutes)) * 60;
+    const nextSeconds = Math.max(1, Math.round(minutes)) * 60;
 
-    updateCurrentTopic((topic) => ({
+    updateTopicById(selectedTopic.id, (topic) => ({
       ...topic,
-      seconds,
+      seconds: nextSeconds,
+    }));
+  }
+
+  function updateSelectedStartMinutes(value) {
+    if (!selectedTopic) {
+      return;
+    }
+
+    const minutes = Number(value);
+    if (!Number.isFinite(minutes)) {
+      return;
+    }
+
+    const nextStart = Math.max(0, Math.round(minutes * 60));
+
+    updateTopicById(selectedTopic.id, (topic) => ({
+      ...topic,
+      startSeconds: nextStart,
     }));
   }
 
@@ -412,37 +689,78 @@ export default function App() {
       return;
     }
 
+    const templatedTopics = instantiateTopics(template.topics).map((topic, index, all) => {
+      const startSeconds = all
+        .slice(0, index)
+        .reduce((sum, candidate) => sum + candidate.seconds, 0);
+
+      return {
+        ...topic,
+        startSeconds,
+      };
+    });
+
     setState((previous) => ({
       ...previous,
-      topics: instantiateTopics(template.topics),
+      topics: templatedTopics,
       currentIndex: 0,
+      timelineCursorSeconds: 0,
       isRunning: false,
     }));
+
+    setSelectedTopicId(templatedTopics[0]?.id || null);
+    setArmedSwapTopicId(null);
   }
 
   function resetAgenda() {
-    setState(buildInitialState(instantiateTopics(DEFAULT_TOPICS)));
+    const base = buildInitialState(instantiateTopics(DEFAULT_TOPICS));
+
+    const sequentialTopics = base.topics.map((topic, index, all) => {
+      const startSeconds = all
+        .slice(0, index)
+        .reduce((sum, candidate) => sum + candidate.seconds, 0);
+
+      return {
+        ...topic,
+        startSeconds,
+      };
+    });
+
+    setState({
+      ...base,
+      topics: sequentialTopics,
+      currentIndex: 0,
+      timelineCursorSeconds: 0,
+    });
+
+    setSelectedTopicId(sequentialTopics[0]?.id || null);
+    setArmedSwapTopicId(null);
   }
 
   function insertTopicAfterCurrent(topic) {
     setState((previous) => {
-      const insertAt = clampIndex(previous.currentIndex, previous.topics.length) + 1;
-      const insertedTopic = createTopic(topic.name, topic.seconds, 0);
+      const current = previous.topics[clampIndex(previous.currentIndex, previous.topics.length)];
+      if (!current) {
+        return previous;
+      }
+
+      const insertStart = current.startSeconds + current.seconds;
+
+      const inserted = createTopic(topic.name, topic.seconds, 0, {
+        startSeconds: insertStart,
+      });
+
       return {
         ...previous,
-        topics: [
-          ...previous.topics.slice(0, insertAt),
-          insertedTopic,
-          ...previous.topics.slice(insertAt),
-        ],
+        topics: [...previous.topics, inserted],
       };
     });
 
-    setInsertStatus(`Inserted \"${topic.name}\" right after current.`);
+    setInsertStatus(`Inserted ${topic.name} after the active topic.`);
     if (insertStatusTimeoutRef.current) {
       window.clearTimeout(insertStatusTimeoutRef.current);
     }
-    insertStatusTimeoutRef.current = window.setTimeout(() => setInsertStatus(''), 2000);
+    insertStatusTimeoutRef.current = window.setTimeout(() => setInsertStatus(''), 2200);
   }
 
   function openCommentComposer() {
@@ -451,17 +769,18 @@ export default function App() {
   }
 
   function submitComment() {
-    const nextText = commentDraft.trim();
-    if (!nextText) {
-      setIsCommentComposerOpen(false);
+    const text = commentDraft.trim();
+
+    if (!text) {
       setCommentDraft('');
+      setIsCommentComposerOpen(false);
       return;
     }
 
     const nextComment = {
       id: createCommentId(),
-      text: nextText,
-      atSeconds: Math.max(0, Math.round(totalElapsedSeconds)),
+      text,
+      atSeconds: timelineCursorSeconds,
     };
 
     setState((previous) => ({
@@ -483,8 +802,8 @@ export default function App() {
 
     if (event.key === 'Escape') {
       event.preventDefault();
-      setIsCommentComposerOpen(false);
       setCommentDraft('');
+      setIsCommentComposerOpen(false);
     }
   }
 
@@ -501,49 +820,95 @@ export default function App() {
     setOpenCommentId((previous) => (previous === commentId ? null : commentId));
   }
 
-  if (!currentTopic) {
+  function zoomOut() {
+    setResolutionIndex((previous) => Math.min(RESOLUTION_LEVELS.length - 1, previous + 1));
+  }
+
+  function zoomIn() {
+    setResolutionIndex((previous) => Math.max(0, previous - 1));
+  }
+
+  function toggleUrlMenu() {
+    setShowUrlMenu((previous) => {
+      const next = !previous;
+      if (next) {
+        setSavedUrlEntries(getSavedUrlEntries());
+      }
+      return next;
+    });
+  }
+
+  function navigateToStoredUrl(url) {
+    if (!url) {
+      return;
+    }
+
+    window.location.assign(url);
+  }
+
+  if (!currentTopic || !selectedTopic) {
     return null;
   }
 
-  const currentMinutes = minutesFromSeconds(currentTopic.seconds);
+  const selectedMinutes = minutesFromSeconds(selectedTopic.seconds);
+  const selectedStartMinutes = ((selectedTopic.startSeconds || 0) / 60).toFixed(1);
   const currentRemainingSeconds = Math.max(0, currentTopic.seconds - currentTopic.elapsed);
+
+  const topicLaneHeight = rowCount * ROW_HEIGHT;
+  const commentLaneTop = LANE_TOP + topicLaneHeight + COMMENT_LANE_SPACING;
+  const trackHeight = commentLaneTop + 44;
 
   return (
     <main className="ganttimer-app">
       <header className="top-bar">
         <div className="brand-stack">
           <h1>Ganttimer</h1>
-          <p>Minimal monochrome timeline with live comments</p>
+          <p>Overlapping rows, drag snap, timed comments</p>
         </div>
 
         <div className="top-controls">
           <button type="button" onClick={toggleTimer}>
             {state.isRunning ? 'Pause' : 'Start'}
           </button>
-          <button type="button" onClick={addTopic}>Add topic</button>
+          <button type="button" onClick={addTopic}>Add</button>
           <button type="button" onClick={removeCurrentTopic}>Remove</button>
           <button type="button" onClick={openCommentComposer}>Comment</button>
+          <button type="button" onClick={toggleUrlMenu}>URLs</button>
         </div>
+
+        {showUrlMenu ? (
+          <div className="url-menu">
+            {savedUrlEntries.length ? (
+              savedUrlEntries.map((entry) => (
+                <button
+                  key={entry.key}
+                  type="button"
+                  className="url-menu-item"
+                  onClick={() => navigateToStoredUrl(entry.key)}
+                >
+                  <span>{entry.key}</span>
+                  <small>{entry.topicCount === null ? 'unknown' : `${entry.topicCount} topics`}</small>
+                </button>
+              ))
+            ) : (
+              <p className="muted">No alternate URL entries found.</p>
+            )}
+          </div>
+        ) : null}
       </header>
 
       <section className="timeline-card">
         <div className="timeline-toolbar">
-          <div className="zoom-pill-group" role="group" aria-label="Timeline zoom">
-            {ZOOM_LEVELS.map((zoom) => (
-              <button
-                key={zoom.id}
-                type="button"
-                className={zoom.id === zoomId ? 'is-active' : ''}
-                onClick={() => setZoomId(zoom.id)}
-              >
-                {zoom.label}
-              </button>
-            ))}
+          <div className="zoom-controls">
+            <button type="button" onClick={zoomIn}>+</button>
+            <button type="button" onClick={zoomOut}>-</button>
+            <span>{resolution.label}</span>
           </div>
 
           <div className="timeline-meta">
-            <span>{formatClock(totalElapsedSeconds)} elapsed</span>
-            <span>{formatClock(totalDurationSeconds)} total</span>
+            <span>Cursor {formatClock(timelineCursorSeconds)}</span>
+            <span>Worked {formatClock(totalElapsedSeconds)}</span>
+            <span>Rows {rowCount}</span>
           </div>
         </div>
 
@@ -551,36 +916,55 @@ export default function App() {
           <div className="now-line" aria-hidden="true" />
 
           <div className="timeline-mover" style={{ transform: `translateX(${translateX}px)` }}>
-            <div className="timeline-track" style={{ width: `${trackWidth}px` }}>
+            <div className="timeline-track" style={{ width: `${trackWidth}px`, height: `${trackHeight}px` }}>
               <div className="timeline-ticks" aria-hidden="true">
                 {ticks.map((tick) => (
-                  <span key={`tick-${tick.second}`} className="tick" style={{ left: `${tick.x}px` }}>
-                    <small>{tick.label}</small>
+                  <span
+                    key={`tick-${tick.second}`}
+                    className={`tick${tick.isMajor ? ' major' : ''}`}
+                    style={{ left: `${tick.x}px` }}
+                  >
+                    {tick.label ? <small>{tick.label}</small> : null}
                   </span>
                 ))}
               </div>
 
-              <div className="topic-lane">
-                {timelineSegments.map((segment) => {
-                  const width = Math.max(segment.seconds * pixelsPerSecond, 16);
-                  const left = segment.start * pixelsPerSecond;
-                  const isCurrent = segment.index === currentIndex;
+              <div className="topic-lane" style={{ top: `${LANE_TOP}px`, height: `${topicLaneHeight}px` }}>
+                {layoutTopics.map((topic) => {
+                  const left = topic.startSeconds * pixelsPerSecond;
+                  const width = Math.max(topic.seconds * pixelsPerSecond, 18);
+                  const top = topic.row * ROW_HEIGHT;
+                  const isCurrent = topic.id === currentTopic.id;
+                  const isSelected = topic.id === selectedTopic.id;
+                  const isArmed = armedSwapTopicId === topic.id && !isCurrent;
 
                   return (
-                    <button
-                      key={segment.id}
-                      type="button"
-                      className={`topic-pill${isCurrent ? ' is-current' : ''}`}
-                      style={{ width: `${width}px`, left: `${left}px` }}
-                      onClick={() => selectTopic(segment.index)}
+                    <div
+                      key={topic.id}
+                      className={`topic-pill${isCurrent ? ' is-current' : ''}${isSelected ? ' is-selected' : ''}`}
+                      style={{ left: `${left}px`, width: `${width}px`, top: `${top}px` }}
+                      onPointerDown={(event) => handleTopicPointerDown(event, topic.id)}
                     >
-                      <span>{segment.name}</span>
-                    </button>
+                      <span>{topic.name}</span>
+
+                      {isArmed ? (
+                        <button
+                          type="button"
+                          className="topic-play-button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            swapToTopic(topic.id);
+                          }}
+                        >
+                          ▶
+                        </button>
+                      ) : null}
+                    </div>
                   );
                 })}
               </div>
 
-              <div className="comment-lane">
+              <div className="comment-lane" style={{ top: `${commentLaneTop}px` }}>
                 {sortedComments.map((comment) => (
                   <div
                     key={comment.id}
@@ -619,7 +1003,7 @@ export default function App() {
         </div>
 
         <div className="active-topic-card">
-          <p>Current topic (centered)</p>
+          <p>Active topic</p>
           <strong>{currentTopic.name}</strong>
           <div className="active-topic-times">
             <span>{formatClock(currentTopic.elapsed)} elapsed</span>
@@ -630,12 +1014,70 @@ export default function App() {
 
       <section className="details-grid">
         <article className="detail-card">
-          <h2>Next untouched topics</h2>
+          <h2>Edit selected topic</h2>
+
+          <label className="edit-field">
+            <span>Name</span>
+            <input
+              type="text"
+              value={selectedTopic.name}
+              onChange={(event) => updateSelectedName(event.target.value)}
+            />
+          </label>
+
+          <label className="edit-field">
+            <span>Duration (minutes)</span>
+            <input
+              type="number"
+              min="1"
+              max="180"
+              value={selectedMinutes}
+              onChange={(event) => updateSelectedMinutes(event.target.value)}
+            />
+          </label>
+
+          <label className="edit-field">
+            <span>Start (minutes)</span>
+            <input
+              type="number"
+              min="0"
+              step="0.5"
+              value={selectedStartMinutes}
+              onChange={(event) => updateSelectedStartMinutes(event.target.value)}
+            />
+          </label>
+
+          <p className="muted">Press once to select/edit. Press same topic again to arm play swap.</p>
+        </article>
+
+        <article className="detail-card">
+          <h2>Unfinished topics (partial tracking)</h2>
+          <div className="chip-button-list">
+            {unfinishedTopics.length ? (
+              unfinishedTopics.map((topic) => (
+                <button
+                  key={`unfinished-${topic.id}`}
+                  type="button"
+                  className="chip-button"
+                  onClick={() => insertTopicAfterCurrent(topic)}
+                >
+                  + {topic.name} · {formatClock(topic.elapsed)} · last {topic.lastWorkedCursor === null
+                    ? 'n/a'
+                    : formatClock(topic.lastWorkedCursor)}
+                </button>
+              ))
+            ) : (
+              <span className="muted">No partially worked topics right now.</span>
+            )}
+          </div>
+          <p className="status-text" aria-live="polite">{insertStatus}</p>
+
+          <h2>Next untouched</h2>
           <div className="chip-list">
             {nextUntouchedTopics.length ? (
               nextUntouchedTopics.map((topic) => (
-                <span key={topic.id} className="chip">
-                  {topic.name} · {formatClock(topic.seconds)}
+                <span key={`next-${topic.id}`} className="chip">
+                  {topic.name} @ {formatClock(topic.startSeconds)}
                 </span>
               ))
             ) : (
@@ -644,33 +1086,12 @@ export default function App() {
           </div>
         </article>
 
-        <article className="detail-card">
-          <h2>Unfinished quick insert</h2>
-          <div className="chip-button-list">
-            {unfinishedTopics.length ? (
-              unfinishedTopics.map((topic) => (
-                <button
-                  key={`insert-${topic.id}`}
-                  type="button"
-                  className="chip-button"
-                  onClick={() => insertTopicAfterCurrent(topic)}
-                >
-                  + {topic.name}
-                </button>
-              ))
-            ) : (
-              <span className="muted">Everything is finished. Nothing to insert.</span>
-            )}
-          </div>
-          <p className="status-text" aria-live="polite">{insertStatus}</p>
-        </article>
-
         <article className="detail-card comments-card">
           <h2>Timer comments</h2>
 
           <div className="live-comment">
-            <strong>Now showing:</strong>
-            <p>{activeLiveComment ? activeLiveComment.text : 'No reached comments yet.'}</p>
+            <strong>Visible now</strong>
+            <p>{activeLiveComment ? activeLiveComment.text : 'No reached comment yet.'}</p>
             <small>
               {upcomingLiveComment
                 ? `Next at ${formatClock(upcomingLiveComment.atSeconds)}`
@@ -680,7 +1101,7 @@ export default function App() {
 
           {isCommentComposerOpen ? (
             <label className="comment-input-wrap">
-              <span>Typing logs instantly. Press Enter to save.</span>
+              <span>Typing logs immediately. Press Enter to finish.</span>
               <input
                 ref={commentInputRef}
                 type="text"
@@ -692,7 +1113,7 @@ export default function App() {
               />
             </label>
           ) : (
-            <p className="muted">Start typing anywhere to open comment capture.</p>
+            <p className="muted">Start typing anywhere to create a comment.</p>
           )}
         </article>
       </section>
@@ -705,26 +1126,6 @@ export default function App() {
             onChange={toggleAutoAdvance}
           />
           <span>Auto-advance</span>
-        </label>
-
-        <label className="topic-edit-pill">
-          <span>Topic</span>
-          <input
-            type="text"
-            value={currentTopic.name}
-            onChange={(event) => updateCurrentTopicName(event.target.value)}
-          />
-        </label>
-
-        <label className="topic-edit-pill number">
-          <span>Minutes</span>
-          <input
-            type="number"
-            min="1"
-            max="180"
-            value={currentMinutes}
-            onChange={(event) => updateCurrentTopicMinutes(event.target.value)}
-          />
         </label>
 
         <div className="template-buttons">

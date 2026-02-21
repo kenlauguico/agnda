@@ -36,6 +36,48 @@ function normalizeElapsed(value) {
   return Math.max(0, Math.round(numeric));
 }
 
+function normalizeStartSeconds(value, fallback = 0) {
+  const numeric = toFiniteNumber(value);
+  if (numeric === null) {
+    return Math.max(0, Math.round(fallback));
+  }
+
+  return Math.max(0, Math.round(numeric));
+}
+
+function normalizeWorkHistory(history) {
+  if (!Array.isArray(history)) {
+    return [];
+  }
+
+  return history
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+
+      const fromCursor = normalizeStartSeconds(entry.fromCursor, 0);
+      const toCursor = normalizeStartSeconds(entry.toCursor, fromCursor);
+      const workedSeconds = Math.max(0, toCursor - fromCursor);
+
+      return {
+        fromCursor,
+        toCursor,
+        workedSeconds,
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeOptionalCursor(value) {
+  const numeric = toFiniteNumber(value);
+  if (numeric === null) {
+    return null;
+  }
+
+  return Math.max(0, Math.round(numeric));
+}
+
 export function makeTopicId() {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
     return globalThis.crypto.randomUUID();
@@ -45,25 +87,30 @@ export function makeTopicId() {
   return `topic-${Date.now().toString(36)}-${topicCounter.toString(36)}`;
 }
 
-export function createTopic(name, seconds, elapsed = 0) {
+export function createTopic(name, seconds, elapsed = 0, options = {}) {
   return {
     id: makeTopicId(),
     name: normalizeName(name),
     seconds: normalizeSeconds(seconds),
     elapsed: normalizeElapsed(elapsed),
+    startSeconds: normalizeStartSeconds(options.startSeconds, 0),
+    workHistory: normalizeWorkHistory(options.workHistory),
+    lastWorkedCursor: normalizeOptionalCursor(options.lastWorkedCursor),
   };
 }
 
-export function createTopicFromMinutes(name, minutes, elapsed = 0) {
+export function createTopicFromMinutes(name, minutes, elapsed = 0, options = {}) {
   const numeric = toFiniteNumber(minutes);
   const totalSeconds = numeric === null ? DEFAULT_TOPIC_SECONDS : numeric * 60;
-  return createTopic(name, totalSeconds, elapsed);
+  return createTopic(name, totalSeconds, elapsed, options);
 }
 
 export function normalizeTopics(candidateTopics) {
   if (!Array.isArray(candidateTopics)) {
     return [];
   }
+
+  let cursor = 0;
 
   return candidateTopics
     .map((topic, index) => {
@@ -76,11 +123,21 @@ export function normalizeTopics(candidateTopics) {
         topic.durationSeconds ??
         (Number.isFinite(Number(topic.minutes)) ? Number(topic.minutes) * 60 : null);
 
+      const startCandidate = toFiniteNumber(topic.startSeconds ?? topic.start ?? topic.offsetSeconds);
+      const startSeconds = startCandidate === null ? cursor : Math.max(0, Math.round(startCandidate));
+
       const normalizedTopic = createTopic(
         topic.name ?? topic.title ?? `Topic ${index + 1}`,
         seconds,
         topic.elapsed ?? topic.progress ?? 0,
+        {
+          startSeconds,
+          workHistory: topic.workHistory ?? topic.workLog ?? [],
+          lastWorkedCursor: topic.lastWorkedCursor ?? topic.lastWorkedAtCursor ?? 0,
+        },
       );
+
+      cursor = Math.max(cursor, startSeconds + normalizedTopic.seconds);
 
       if (topic.id && typeof topic.id === 'string') {
         return { ...normalizedTopic, id: topic.id };
