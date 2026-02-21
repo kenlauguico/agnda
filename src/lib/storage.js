@@ -23,6 +23,45 @@ function toBoolean(value) {
   return Boolean(value);
 }
 
+function toSafeNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  return numeric;
+}
+
+function normalizeComments(comments) {
+  if (!Array.isArray(comments)) {
+    return [];
+  }
+
+  return comments
+    .map((comment, index) => {
+      if (!comment || typeof comment !== 'object') {
+        return null;
+      }
+
+      const text = typeof comment.text === 'string' ? comment.text.trim() : '';
+      if (!text) {
+        return null;
+      }
+
+      const atSeconds = Math.max(0, Math.round(toSafeNumber(comment.atSeconds, 0)));
+      const idCandidate = typeof comment.id === 'string' && comment.id.length
+        ? comment.id
+        : `comment-${index}-${atSeconds}`;
+
+      return {
+        id: idCandidate,
+        text,
+        atSeconds,
+      };
+    })
+    .filter(Boolean);
+}
+
 function readJSON(storage, key) {
   if (!storage || typeof storage.getItem !== 'function' || !key) {
     return null;
@@ -97,6 +136,7 @@ export function buildInitialState(topics) {
     currentIndex: 0,
     autoAdvance: false,
     isRunning: false,
+    comments: [],
   };
 }
 
@@ -119,6 +159,7 @@ export function migrateStateRecord(record, fallbackTopics = instantiateTopics(DE
     topics,
     currentIndex,
     autoAdvance: toBoolean(record.autoAdvance ?? record.autoTopic ?? false),
+    comments: normalizeComments(record.comments),
     // We intentionally pause legacy sessions on migration to avoid multi-day drift.
     isRunning:
       record.schemaVersion === STORAGE_SCHEMA_VERSION ? toBoolean(record.isRunning) : false,
@@ -185,6 +226,7 @@ export function saveState(state, storage = globalThis.window?.localStorage) {
     currentIndex: clampIndex(state?.currentIndex ?? 0, topics.length),
     autoAdvance: toBoolean(state?.autoAdvance),
     isRunning: toBoolean(state?.isRunning),
+    comments: normalizeComments(state?.comments),
   };
 
   try {
