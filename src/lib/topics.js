@@ -1,12 +1,24 @@
-const MIN_TOPIC_SECONDS = 60;
+const MIN_TOPIC_SECONDS = 30;
 const DEFAULT_TOPIC_SECONDS = 5 * 60;
 const FALLBACK_TOPIC_NAME = 'New topic';
 
-let topicCounter = 0;
+let recordCounter = 0;
 
 function toFiniteNumber(value) {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+}
+
+function toBoolean(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    return value.toLowerCase() === 'true';
+  }
+
+  return Boolean(value);
 }
 
 function normalizeName(name, fallback = FALLBACK_TOPIC_NAME) {
@@ -36,28 +48,71 @@ function normalizeElapsed(value) {
   return Math.max(0, Math.round(numeric));
 }
 
-export function makeTopicId() {
-  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
-    return globalThis.crypto.randomUUID();
+function normalizeTag(tag) {
+  if (typeof tag !== 'string') {
+    return '';
   }
 
-  topicCounter += 1;
-  return `topic-${Date.now().toString(36)}-${topicCounter.toString(36)}`;
+  const trimmed = tag.trim().toLowerCase();
+  return TOPIC_TAGS.some((option) => option.id === trimmed) ? trimmed : '';
 }
 
-export function createTopic(name, seconds, elapsed = 0) {
+function normalizeNotes(candidateNotes) {
+  if (!Array.isArray(candidateNotes)) {
+    return [];
+  }
+
+  return candidateNotes
+    .map((note, index) => {
+      if (!note || typeof note !== 'object') {
+        return null;
+      }
+
+      const text = typeof note.text === 'string' ? note.text.trim() : '';
+      if (!text) {
+        return null;
+      }
+
+      return {
+        id:
+          typeof note.id === 'string' && note.id.trim()
+            ? note.id
+            : makeEntityId(`note-${index + 1}`),
+        text,
+        offsetSeconds: normalizeElapsed(note.offsetSeconds ?? note.elapsed ?? 0),
+      };
+    })
+    .filter(Boolean);
+}
+
+export function makeEntityId(prefix = 'record') {
+  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+    return `${prefix}-${globalThis.crypto.randomUUID()}`;
+  }
+
+  recordCounter += 1;
+  return `${prefix}-${Date.now().toString(36)}-${recordCounter.toString(36)}`;
+}
+
+export function createTopic(name, seconds, elapsed = 0, options = {}) {
   return {
-    id: makeTopicId(),
+    id:
+      typeof options.id === 'string' && options.id.trim()
+        ? options.id
+        : makeEntityId('topic'),
     name: normalizeName(name),
     seconds: normalizeSeconds(seconds),
     elapsed: normalizeElapsed(elapsed),
+    tag: normalizeTag(options.tag),
+    addressed: toBoolean(options.addressed ?? options.done),
+    notes: normalizeNotes(options.notes),
   };
 }
 
-export function createTopicFromMinutes(name, minutes, elapsed = 0) {
+export function createTopicFromMinutes(name, minutes, elapsed = 0, options = {}) {
   const numeric = toFiniteNumber(minutes);
   const totalSeconds = numeric === null ? DEFAULT_TOPIC_SECONDS : numeric * 60;
-  return createTopic(name, totalSeconds, elapsed);
+  return createTopic(name, totalSeconds, elapsed, options);
 }
 
 export function normalizeTopics(candidateTopics) {
@@ -76,25 +131,25 @@ export function normalizeTopics(candidateTopics) {
         topic.durationSeconds ??
         (Number.isFinite(Number(topic.minutes)) ? Number(topic.minutes) * 60 : null);
 
-      const normalizedTopic = createTopic(
+      return createTopic(
         topic.name ?? topic.title ?? `Topic ${index + 1}`,
         seconds,
         topic.elapsed ?? topic.progress ?? 0,
+        {
+          id: topic.id,
+          tag: topic.tag,
+          addressed: topic.addressed ?? topic.done,
+          notes: topic.notes,
+        },
       );
-
-      if (topic.id && typeof topic.id === 'string') {
-        return { ...normalizedTopic, id: topic.id };
-      }
-
-      return normalizedTopic;
     })
     .filter(Boolean);
 }
 
 export const DEFAULT_TOPICS = Object.freeze([
-  { name: "LET'S", minutes: 5 },
-  { name: 'MAKE', minutes: 10 },
-  { name: 'SHIP', minutes: 5 },
+  { name: 'Opening', minutes: 2 },
+  { name: 'Main Topic', minutes: 10 },
+  { name: 'Wrap Up', minutes: 5 },
 ]);
 
 export const TEMPLATE_PRESETS = Object.freeze([
@@ -135,12 +190,61 @@ export const TEMPLATE_PRESETS = Object.freeze([
   },
 ]);
 
+export const TOPIC_DURATION_OPTIONS = Object.freeze([
+  { label: '30s', seconds: 30 },
+  { label: '60s', seconds: 60 },
+  { label: '2m', seconds: 2 * 60 },
+  { label: '5m', seconds: 5 * 60 },
+  { label: '10m', seconds: 10 * 60 },
+  { label: '15m', seconds: 15 * 60 },
+  { label: '25m', seconds: 25 * 60 },
+  { label: '30m', seconds: 30 * 60 },
+  { label: '45m', seconds: 45 * 60 },
+  { label: '60m', seconds: 60 * 60 },
+]);
+
+export const TOPIC_TAGS = Object.freeze([
+  { id: 'open', label: 'Open', tone: 'lemon' },
+  { id: 'focus', label: 'Focus', tone: 'mint' },
+  { id: 'decision', label: 'Decision', tone: 'sky' },
+  { id: 'parking', label: 'Parking', tone: 'peach' },
+  { id: 'done', label: 'Done', tone: 'rose' },
+]);
+
 export function instantiateTopics(templateTopics) {
   if (!Array.isArray(templateTopics)) {
     return [];
   }
 
   return templateTopics.map((topic) =>
-    createTopicFromMinutes(topic.name, topic.minutes, topic.elapsed),
+    createTopicFromMinutes(topic.name, topic.minutes, topic.elapsed, {
+      tag: topic.tag,
+      addressed: topic.addressed,
+      notes: topic.notes,
+    }),
   );
+}
+
+export function reorderTopics(candidateTopics, sourceTopicId, targetTopicId, placement = 'before') {
+  if (!Array.isArray(candidateTopics) || candidateTopics.length < 2) {
+    return candidateTopics;
+  }
+
+  const sourceIndex = candidateTopics.findIndex((topic) => topic.id === sourceTopicId);
+  const targetIndex = candidateTopics.findIndex((topic) => topic.id === targetTopicId);
+
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
+    return candidateTopics;
+  }
+
+  const nextTopics = candidateTopics.slice();
+  const [movedTopic] = nextTopics.splice(sourceIndex, 1);
+  const normalizedTargetIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+  const insertionIndex =
+    placement === 'after' ? normalizedTargetIndex + 1 : normalizedTargetIndex;
+
+  nextTopics.splice(Math.max(0, Math.min(insertionIndex, nextTopics.length)), 0, movedTopic);
+
+  const changed = nextTopics.some((topic, index) => topic !== candidateTopics[index]);
+  return changed ? nextTopics : candidateTopics;
 }
