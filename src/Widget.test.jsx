@@ -19,6 +19,14 @@ afterEach(() => {
 });
 
 describe('inline widget', () => {
+  it('loads a saved agenda directly from the URL hash', () => {
+    const topic = createTopicFromMinutes('From hash', 5);
+    saveState(buildInitialState([topic], { agendaId: 'weekly-sync' }), window.localStorage);
+    window.history.replaceState(null, '', '/?embed=1#weekly-sync');
+    render(<Widget />);
+    expect(screen.getByText('From hash')).toBeInTheDocument();
+  });
+
   it('shows a clear AGNDA fallback when the saved agenda is absent', () => {
     render(<Widget />);
     expect(screen.getByText('This saved agenda is not available in this browser.')).toBeInTheDocument();

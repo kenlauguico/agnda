@@ -11,7 +11,7 @@ https://agnda.example/?embed=1&agenda=weekly-sync&parentOrigin=https%3A%2F%2Fnot
 https://agnda.example/?embed=1&agenda=https%3A%2F%2Fagnda.example%2F%23weekly-sync&parentOrigin=https%3A%2F%2Fnotes.example
 ```
 
-`agenda` accepts a slug (`weekly-sync`), hash (`#weekly-sync`, `#v2/...`, `#v3/...`, or a legacy slash hash), or a complete saved URL. Encode hashes and URLs as query parameter values. A URL from an older AGNDA host is accepted only when that exact URL is present in the saved library. The embed URL remains stable as the saved agenda changes. AGNDA requires the agenda to exist in its local saved library; a share hash alone is not treated as an already saved agenda.
+`agenda` accepts a slug (`weekly-sync`), hash (`#weekly-sync`, `#v2/...`, `#v3/...`, or a legacy slash hash), or a complete saved URL. If `agenda` is omitted, the widget uses the URL hash. This keeps large share hashes in the fragment instead of the server request line. Encode hashes and URLs when using the query parameter. A URL from an older AGNDA host is accepted only when that exact URL is present in the saved library. The embed URL remains stable as the saved agenda changes. AGNDA requires the agenda to exist in its local saved library; a share hash alone is not treated as an already saved agenda.
 
 The default `view` is `capture`. `view=time` and `view=progress` select compact initial views. The parent can cycle `capture → time → progress → capture` with Option-click by sending `set-view`; Option-click inside the widget also cycles. The widget handles its own note capture and duration slider.
 

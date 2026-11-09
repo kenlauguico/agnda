@@ -33,7 +33,7 @@ function getStorage() {
 
 function initialWidgetData() {
   const params = new URLSearchParams(window.location.search);
-  const target = parseWidgetTarget(params.get('agenda'), window.location.origin);
+  const target = parseWidgetTarget(params.get('agenda') || window.location.hash, window.location.origin);
   const storage = getStorage();
   let loaded = null;
   try {
