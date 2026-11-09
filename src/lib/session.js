@@ -8,14 +8,29 @@ export function advanceSessionBySeconds(previous, deltaSeconds) {
   const nextTopics = previous.topics.map((topic) => ({ ...topic }));
   let nextIndex = clampIndex(previous.currentIndex, nextTopics.length);
   let nextSelectedTopicId = previous.selectedTopicId;
+  let nextSecondaryIndex = previous.secondaryIndex ?? -1;
+  let nextSecondaryTopicId = previous.secondaryTopicId ?? null;
   let nextRunning = previous.isRunning;
   let remainingSeconds = Math.max(0, Math.floor(Number(deltaSeconds) || 0));
 
   if (!previous.autoAdvance) {
-    nextTopics[nextIndex] = {
-      ...nextTopics[nextIndex],
-      elapsed: nextTopics[nextIndex].elapsed + remainingSeconds,
-    };
+    const primary = nextTopics[nextIndex];
+    if (primary) {
+      nextTopics[nextIndex] = {
+        ...primary,
+        elapsed: primary.elapsed + remainingSeconds,
+      };
+    }
+    
+    if (nextSecondaryIndex >= 0) {
+      const secondary = nextTopics[nextSecondaryIndex];
+      if (secondary) {
+        nextTopics[nextSecondaryIndex] = {
+          ...secondary,
+          elapsed: secondary.elapsed + remainingSeconds,
+        };
+      }
+    }
 
     return {
       ...previous,
@@ -24,46 +39,68 @@ export function advanceSessionBySeconds(previous, deltaSeconds) {
   }
 
   while (remainingSeconds > 0 && nextRunning) {
-    const currentTopic = nextTopics[nextIndex];
-    if (!currentTopic) {
-      nextRunning = false;
-      break;
-    }
+    const primary = nextIndex >= 0 && nextIndex < nextTopics.length ? nextTopics[nextIndex] : null;
+    const secondary = nextSecondaryIndex >= 0 && nextSecondaryIndex < nextTopics.length ? nextTopics[nextSecondaryIndex] : null;
 
-    const secondsLeft = Math.max(0, currentTopic.seconds - currentTopic.elapsed);
+    const pSecondsLeft = primary ? Math.max(0, primary.seconds - primary.elapsed) : Infinity;
+    const sSecondsLeft = secondary ? Math.max(0, secondary.seconds - secondary.elapsed) : Infinity;
 
-    if (secondsLeft === 0) {
-      if (nextIndex < nextTopics.length - 1) {
-        nextIndex += 1;
-        nextSelectedTopicId = nextTopics[nextIndex]?.id ?? nextSelectedTopicId;
-        continue;
+    const primaryFinished = primary && pSecondsLeft === 0;
+    const secondaryFinished = secondary && sSecondsLeft === 0;
+
+    let primaryCanAdvance = false;
+    let secondaryCanAdvance = false;
+
+    if (primaryFinished) {
+      let candidate = nextIndex + 1;
+      while (candidate === nextSecondaryIndex) candidate++;
+      if (candidate < nextTopics.length) {
+        nextIndex = candidate;
+        nextSelectedTopicId = nextTopics[candidate].id;
+        primaryCanAdvance = true;
       }
+    }
 
+    if (secondaryFinished) {
+      let candidate = nextSecondaryIndex + 1;
+      while (candidate === nextIndex) candidate++;
+      if (candidate < nextTopics.length) {
+        nextSecondaryIndex = candidate;
+        nextSecondaryTopicId = nextTopics[candidate].id;
+        secondaryCanAdvance = true;
+      }
+    }
+
+    if (primaryCanAdvance || secondaryCanAdvance) {
+      continue;
+    }
+
+    if ((!primary || primaryFinished) && (!secondary || secondaryFinished)) {
       nextRunning = false;
       break;
     }
 
-    if (remainingSeconds < secondsLeft) {
+    const stepOptions = [remainingSeconds];
+    if (primary && !primaryFinished) stepOptions.push(pSecondsLeft);
+    if (secondary && !secondaryFinished) stepOptions.push(sSecondsLeft);
+
+    const step = Math.min(...stepOptions);
+
+    if (primary && !primaryFinished) {
       nextTopics[nextIndex] = {
-        ...currentTopic,
-        elapsed: currentTopic.elapsed + remainingSeconds,
+        ...primary,
+        elapsed: primary.elapsed + step,
       };
-      remainingSeconds = 0;
-      break;
+    }
+    
+    if (secondary && !secondaryFinished) {
+      nextTopics[nextSecondaryIndex] = {
+        ...secondary,
+        elapsed: secondary.elapsed + step,
+      };
     }
 
-    nextTopics[nextIndex] = {
-      ...currentTopic,
-      elapsed: currentTopic.elapsed + secondsLeft,
-    };
-    remainingSeconds -= secondsLeft;
-
-    if (nextIndex < nextTopics.length - 1) {
-      nextIndex += 1;
-      nextSelectedTopicId = nextTopics[nextIndex]?.id ?? nextSelectedTopicId;
-    } else {
-      nextRunning = false;
-    }
+    remainingSeconds -= step;
   }
 
   return {
@@ -71,6 +108,8 @@ export function advanceSessionBySeconds(previous, deltaSeconds) {
     topics: nextTopics,
     currentIndex: nextIndex,
     selectedTopicId: nextSelectedTopicId,
+    secondaryIndex: nextSecondaryIndex,
+    secondaryTopicId: nextSecondaryTopicId,
     isRunning: nextRunning,
   };
 }

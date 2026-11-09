@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="820" viewBox="0 0 1400 820">
+<rect width="1400" height="820" fill="#F8F8F5"/>
+<text x="48" y="42" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="500" letter-spacing="1.4" fill="#777773">AGNDA / DESIGN STAGE 03</text>
+<text x="48" y="80" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="30" font-weight="500" letter-spacing="0" fill="#171715">Focus / compact</text>
+<text x="48" y="105" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="400" letter-spacing="0" fill="#777773">One large number and one main title. Dense, systematic controls stay at the edges.</text>
+<path d="M48 126 L1352 126" stroke="#D4D4CF" stroke-width="1" fill="none"/>
+<rect x="48" y="151" width="954" height="610" rx="5" fill="#FFFFFF" stroke="#D4D4CF" stroke-width="1"/>
+<rect x="1020" y="151" width="332" height="610" rx="5" fill="#FFFFFF" stroke="#D4D4CF" stroke-width="1"/>
+<text x="72" y="184" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="500" letter-spacing="1.4" fill="#777773">FOCUS MODE    /    PRODUCT WEEKLY</text>
+<text x="978" y="184" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" letter-spacing="0" fill="#777773" text-anchor="end">03 OF 04</text>
+<path d="M72 200 L978 200" stroke="#D4D4CF" stroke-width="1" fill="none"/>
+<text x="102" y="270" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="500" letter-spacing="1.4" fill="#777773">CURRENT TOPIC    /    DISCUSSION</text>
+<text x="102" y="324" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="38" font-weight="600" letter-spacing="0" fill="#171715">Priorities &amp; blockers</text>
+<text x="102" y="455" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="112" font-weight="600" letter-spacing="-6" fill="#171715">06:24</text>
+<path d="M102 493 L948 493" stroke="#D4D4CF" stroke-width="1" fill="none"/>
+<path d="M102 493 L407 493" stroke="#DC6A2E" stroke-width="2" fill="none"/>
+<circle cx="407" cy="493" r="3" fill="#DC6A2E" stroke="#DC6A2E" stroke-width="0"/>
+<text x="102" y="521" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" letter-spacing="1" fill="#777773">03:36 ELAPSED</text>
+<text x="948" y="521" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" letter-spacing="1" fill="#777773" text-anchor="end">10:00 TOTAL</text>
+<rect x="102" y="559" width="846" height="54" rx="3" fill="#F8F8F5" stroke="#D4D4CF" stroke-width="0.75"/>
+<text x="121" y="592" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="14" font-weight="400" letter-spacing="0" fill="#A6A6A0">+  Capture a note   /   N</text>
+<rect x="102" y="666" width="125" height="36" rx="3" fill="#FFFFFF" stroke="#D4D4CF" stroke-width="1"/>
+<text x="114" y="689" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="11" font-weight="500" letter-spacing="0" fill="#171715">Previous</text>
+<rect x="237" y="666" width="110" height="36" rx="3" fill="#FFFFFF" stroke="#DC6A2E" stroke-width="1"/>
+<rect x="247" y="681" width="5" height="5" rx="0" fill="#DC6A2E" stroke="#DC6A2E" stroke-width="0"/>
+<text x="261" y="689" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="11" font-weight="500" letter-spacing="0" fill="#DC6A2E">Pause</text>
+<rect x="357" y="666" width="110" height="36" rx="3" fill="#FFFFFF" stroke="#D4D4CF" stroke-width="1"/>
+<text x="369" y="689" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="11" font-weight="500" letter-spacing="0" fill="#171715">Next</text>
+<text x="948" y="689" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" letter-spacing="1" fill="#777773" text-anchor="end">EXIT FOCUS    ×</text>
+<text x="1042" y="184" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="500" letter-spacing="1.4" fill="#777773">QUEUE    /    02 REMAINING</text>
+<path d="M1042 200 L1330 200" stroke="#D4D4CF" stroke-width="1" fill="none"/>
+<text x="1042" y="239" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="500" letter-spacing="1.4" fill="#777773">UP NEXT    /    15 MIN</text>
+<text x="1042" y="272" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="17" font-weight="500" letter-spacing="0" fill="#171715">Release readiness</text>
+<path d="M1042 297 L1330 297" stroke="#D4D4CF" stroke-width="0.75" fill="none"/>
+<text x="1042" y="336" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="500" letter-spacing="1.4" fill="#777773">LATER    /    08 MIN</text>
+<text x="1042" y="369" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="17" font-weight="500" letter-spacing="0" fill="#171715">Design updates</text>
+<path d="M1042 394 L1330 394" stroke="#D4D4CF" stroke-width="0.75" fill="none"/>
+<text x="1042" y="433" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="500" letter-spacing="1.4" fill="#777773">SESSION PROGRESS</text>
+<text x="1330" y="433" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" letter-spacing="0" fill="#DC6A2E" text-anchor="end">09%</text>
+<path d="M1042 451 L1330 451" stroke="#D4D4CF" stroke-width="0.75" fill="none"/>
+<path d="M1042 451 L1068 451" stroke="#DC6A2E" stroke-width="2" fill="none"/>
+<text x="1042" y="511" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="10" font-weight="500" letter-spacing="1.4" fill="#777773">KEYBOARD</text>
+<text x="1042" y="547" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" letter-spacing="0" fill="#171715">SPACE</text>
+<text x="1160" y="547" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="12" font-weight="400" letter-spacing="0" fill="#777773">Pause / resume</text>
+<text x="1042" y="579" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="11" font-weight="400" letter-spacing="0" fill="#171715">N</text>
+<text x="1160" y="579" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="12" font-weight="400" letter-spacing="0" fill="#777773">Add note</text>
+<text x="1042" y="611" font-family="IBM Plex Mono, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="400" letter-spacing="0" fill="#171715">→</text>
+<text x="1160" y="611" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="12" font-weight="400" letter-spacing="0" fill="#777773">Next topic</text>
+<path d="M1042 641 L1330 641" stroke="#D4D4CF" stroke-width="1" fill="none"/>
+<text x="1042" y="680" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="11" font-weight="400" letter-spacing="0" fill="#777773">Thin controls / single accent / no decorative fill</text>
+</svg>

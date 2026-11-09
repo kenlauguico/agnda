@@ -1,0 +1,340 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Montserrat:wght@400;500;600&display=swap');
+
+body:has(.widget) {
+  margin: 0;
+  background: transparent;
+}
+
+.widget,
+.widget * {
+  box-sizing: border-box;
+}
+
+.widget {
+  --ink: #1b1b19;
+  --muted: #73736d;
+  --line: #d5d5cf;
+  --soft: #f8f8f5;
+  --accent: #dc6a2e;
+  width: 100%;
+  min-width: 220px;
+  padding: 12px 14px 13px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--ink);
+  font-family: 'Montserrat', 'Avenir Next', sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.widget button,
+.widget input,
+.widget textarea {
+  font: inherit;
+}
+
+.widget button {
+  cursor: pointer;
+}
+
+.widget :is(button, input, textarea):focus-visible {
+  outline: 1px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.widget-header,
+.widget-topic__heading,
+.widget-track-labels,
+.widget-composer__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.widget-header {
+  padding-bottom: 9px;
+  border-bottom: 0.75px solid var(--line);
+}
+
+.widget-brand,
+.widget-session,
+.widget-track-labels,
+.widget-note-preview > span,
+.widget-connection {
+  color: var(--muted);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.widget-brand {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.widget-brand span {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.widget-session {
+  white-space: nowrap;
+}
+
+.widget-topic {
+  padding-top: 12px;
+}
+
+.widget-topic + .widget-topic {
+  margin-top: 12px;
+  border-top: 0.75px solid var(--line);
+}
+
+.widget-topic__heading {
+  align-items: baseline;
+}
+
+.widget-topic__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.widget-topic__remaining {
+  flex: 0 0 auto;
+  color: var(--ink);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 22px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.05em;
+  line-height: 1;
+}
+
+.widget-track-wrap {
+  position: relative;
+  height: 47px;
+  margin-top: 10px;
+}
+
+.widget-track {
+  position: absolute;
+  top: 11px;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--line);
+}
+
+.widget-track__elapsed {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 2px;
+  background: var(--accent);
+  transition: width 180ms linear;
+}
+
+.widget-track__duration {
+  position: absolute;
+  top: -5px;
+  width: 1px;
+  height: 12px;
+  background: var(--ink);
+  pointer-events: none;
+}
+
+.widget-note-dot {
+  position: absolute;
+  top: 7px;
+  z-index: 2;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  border: 1px solid var(--accent);
+  border-radius: 50%;
+  background: #fff;
+  transform: translateX(-50%);
+}
+
+.widget-note-dot:hover,
+.widget-note-dot:focus-visible {
+  background: var(--accent);
+}
+
+.widget-duration-slider {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  left: 0;
+  z-index: 1;
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  border: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: ew-resize;
+}
+
+.widget-duration-slider::-webkit-slider-runnable-track {
+  height: 20px;
+  background: transparent;
+}
+
+.widget-duration-slider::-moz-range-track {
+  height: 20px;
+  background: transparent;
+}
+
+.widget-duration-slider::-webkit-slider-thumb {
+  width: 11px;
+  height: 15px;
+  margin-top: 2px;
+  border: 1px solid var(--ink);
+  border-radius: 2px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: #fff;
+  box-shadow: 0 0 0 2px #fff;
+}
+
+.widget-duration-slider::-moz-range-thumb {
+  width: 11px;
+  height: 15px;
+  border: 1px solid var(--ink);
+  border-radius: 2px;
+  background: #fff;
+  box-shadow: 0 0 0 2px #fff;
+}
+
+.widget-track-labels {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  font-size: 9px;
+}
+
+.widget-note-preview {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 9px;
+  margin: 4px 0 10px;
+  padding: 9px 10px;
+  border: 0.75px solid var(--line);
+  border-radius: 3px;
+  background: var(--soft);
+}
+
+.widget-note-preview p {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.widget-note-preview button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.widget-note-prompt,
+.widget-composer textarea {
+  display: block;
+  width: 100%;
+  border: 0.75px solid var(--line);
+  border-radius: 3px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.widget-note-prompt {
+  height: 35px;
+  margin-top: 9px;
+  padding: 0 10px;
+  cursor: text;
+}
+
+.widget-note-prompt::placeholder,
+.widget-composer textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.widget-composer {
+  margin-top: 9px;
+}
+
+.widget-composer textarea {
+  min-height: 78px;
+  padding: 9px 10px;
+  resize: vertical;
+}
+
+.widget-composer__actions {
+  justify-content: flex-end;
+  margin-top: 7px;
+}
+
+.widget-composer__actions button {
+  padding: 5px 9px;
+  border: 0.75px solid var(--line);
+  border-radius: 3px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.widget-composer__actions button[type='submit'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.widget-status,
+.widget-connection {
+  margin: 10px 0 0;
+  color: var(--muted);
+}
+
+.widget-fallback {
+  padding: 17px 0 4px;
+}
+
+.widget-fallback p {
+  margin: 0 0 9px;
+}
+
+.widget :is(.widget-fallback, .widget-connection) a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.widget--time .widget-topic {
+  padding-bottom: 4px;
+}
+
+.widget--progress .widget-topic {
+  padding-bottom: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .widget *,
+  .widget *::before,
+  .widget *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

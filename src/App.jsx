@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { buildAgendaHash, humanizeAgendaId, normalizeAgendaId } from './lib/hashAgenda';
+import { flushSync } from 'react-dom';
+import { buildAgendaHash, humanizeAgendaId, normalizeAgendaId, parseAgendaHash } from './lib/hashAgenda';
 import { advanceSessionBySeconds } from './lib/session';
 import {
   buildInitialState,
@@ -26,12 +27,29 @@ import {
   formatShortDuration,
   parseLooseDuration,
 } from './lib/time';
+import {
+  formatAgendaMarkdown,
+  formatTopicMarkdown,
+  writeTextToClipboard,
+} from './lib/agendaMarkdown';
+import { getTopicFaviconHref, setDocumentFavicon } from './lib/favicon';
+import { mergeWidgetChanges } from './lib/widget';
 import './styles.css';
+import './thin-line.css';
 
 const TODO_PATTERN = /^\s*(?:-\s*)?\[\s*([xX]?)\s*\]\s*(.+)$/;
 const URL_PATTERN = /https?:\/\/[^\s]+/g;
-const THEME_STORAGE_KEY = 'agnda:visual-theme:v1';
+const THEME_STORAGE_KEY = 'agnda:visual-theme:v2';
+const MINI_MODE_MAX_WIDTH = 820;
+const MINI_MODE_MAX_HEIGHT = 680;
+const MOBILE_LAYOUT_MAX_WIDTH = 720;
 const THEME_OPTIONS = [
+  {
+    id: 'thin-line',
+    name: 'Thin-Line',
+    icon: '▦',
+    description: 'Monochrome tools with one orange accent for active progress.',
+  },
   {
     id: 'vibrant',
     name: 'Vibrant Design',
@@ -50,6 +68,49 @@ function resolveThemeId(candidate) {
   return THEME_OPTIONS.some((theme) => theme.id === candidate)
     ? candidate
     : THEME_OPTIONS[0].id;
+}
+
+function detectMiniMode(viewport = globalThis.window) {
+  if (!viewport) {
+    return false;
+  }
+
+  const width = Number(viewport.innerWidth);
+  const height = Number(viewport.innerHeight);
+
+  return (
+    (Number.isFinite(width) && width > 0 && width <= MINI_MODE_MAX_WIDTH) ||
+    (Number.isFinite(height) && height > 0 && height <= MINI_MODE_MAX_HEIGHT)
+  );
+}
+
+function detectMobileViewport(viewport = globalThis.window) {
+  if (!viewport) {
+    return false;
+  }
+
+  const width = Number(viewport.innerWidth);
+  return Number.isFinite(width) && width > 0 && width <= MOBILE_LAYOUT_MAX_WIDTH;
+}
+
+function getVisualViewportInset(viewport = globalThis.window) {
+  if (!viewport) {
+    return 0;
+  }
+
+  const layoutHeight = Number(viewport.innerHeight);
+  const visualViewport = viewport.visualViewport;
+  if (!Number.isFinite(layoutHeight) || !visualViewport) {
+    return 0;
+  }
+
+  const visualHeight = Number(visualViewport.height);
+  const visualTop = Number(visualViewport.offsetTop);
+  if (!Number.isFinite(visualHeight) || !Number.isFinite(visualTop)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.round(layoutHeight - visualHeight - visualTop));
 }
 
 function formatLongDate(date = new Date()) {
@@ -216,16 +277,69 @@ function isEditableTarget(target) {
   return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
 }
 
+function hasMeaningfulDocumentSelection(
+  viewport = globalThis.window,
+  documentRef = globalThis.document,
+) {
+  if (!documentRef) {
+    return false;
+  }
+
+  const activeElement = documentRef.activeElement;
+  if (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
+    const { selectionStart, selectionEnd } = activeElement;
+    if (
+      Number.isInteger(selectionStart) &&
+      Number.isInteger(selectionEnd) &&
+      selectionEnd > selectionStart
+    ) {
+      return true;
+    }
+  }
+
+  const selection = viewport?.getSelection?.() ?? documentRef.getSelection?.();
+  return Boolean(selection?.toString());
+}
+
 function activateTopicInState(previous, topicId) {
   const nextIndex = previous.topics.findIndex((topic) => topic.id === topicId);
   if (nextIndex < 0) {
     return previous;
   }
 
+  // If this topic is already active as the secondary topic, clear it from secondary track
+  const nextSecondaryIndex = nextIndex === previous.secondaryIndex ? -1 : previous.secondaryIndex;
+  const nextSecondaryTopicId = nextIndex === previous.secondaryIndex ? null : previous.secondaryTopicId;
+
   return {
     ...previous,
     currentIndex: nextIndex,
     selectedTopicId: topicId,
+    secondaryIndex: nextSecondaryIndex,
+    secondaryTopicId: nextSecondaryTopicId,
+    isRunning: true,
+    topics: previous.topics.map((topic) =>
+      topic.id === topicId ? { ...topic, addressed: false } : topic,
+    ),
+  };
+}
+
+function activateSecondaryTopicInState(previous, topicId) {
+  const nextSecondaryIndex = previous.topics.findIndex((topic) => topic.id === topicId);
+  if (nextSecondaryIndex < 0) {
+    return previous;
+  }
+
+  // If this topic is currently the primary topic, we can't also make it secondary. 
+  // We'll just do nothing, or maybe swap them? Just return previous.
+  if (nextSecondaryIndex === previous.currentIndex) {
+    return previous;
+  }
+
+  return {
+    ...previous,
+    secondaryIndex: nextSecondaryIndex,
+    secondaryTopicId: topicId,
     isRunning: true,
     topics: previous.topics.map((topic) =>
       topic.id === topicId ? { ...topic, addressed: false } : topic,
@@ -235,6 +349,18 @@ function activateTopicInState(previous, topicId) {
 
 function activateTopicManually(previous, topicId) {
   const nextState = activateTopicInState(previous, topicId);
+  if (nextState === previous) {
+    return previous;
+  }
+
+  return {
+    ...nextState,
+    autoAdvance: false,
+  };
+}
+
+function activateSecondaryTopicManually(previous, topicId) {
+  const nextState = activateSecondaryTopicInState(previous, topicId);
   if (nextState === previous) {
     return previous;
   }
@@ -322,6 +448,16 @@ function ChevronIcon({ expanded = false }) {
   );
 }
 
+function EllipsisIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="6" cy="12" r="1.7" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.7" fill="currentColor" />
+      <circle cx="18" cy="12" r="1.7" fill="currentColor" />
+    </svg>
+  );
+}
+
 function PlusIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -337,14 +473,292 @@ function PlusIcon() {
   );
 }
 
+function ArrowIcon({ direction = 'right' }) {
+  const path = direction === 'left' ? 'M14 6l-6 6 6 6' : 'M10 6l6 6-6 6';
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d={path}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function PlayPauseIcon({ isRunning }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      {isRunning ? (
+        <path
+          d="M8 6v12M16 6v12"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.1"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ) : (
+        <path d="M9 7.5 17 12l-8 4.5z" fill="currentColor" />
+      )}
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M5 12.5 10 17l9-10"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M7 7l10 10M17 7 7 17"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function InfoIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M12 8.1h.01M10.9 11.4H12v4.5h1.1M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function MinimizeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M6 15.5h12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ExpandIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M9 4.5H4.5V9M15 4.5h4.5V9M9 19.5H4.5V15M15 19.5h4.5V15"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ResetIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M4.2 8.1a8 8 0 1 1-1.2 7.4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M3.5 4.5V8.5H7.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function TaskListIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M9 7h10M9 12h10M9 17h10M4.5 7h.01M4.5 12h.01M4.5 17h.01"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function MobileCopyMenu({
+  buttonRef,
+  menuRef,
+  copied = false,
+  isOpen = false,
+  menuId,
+  buttonLabel,
+  actionLabel,
+  onToggle,
+  onAction,
+}) {
+  return (
+    <div className="mobile-copy-menu">
+      {copied ? (
+        <span className="mobile-copy-menu__feedback" role="status" aria-live="polite">
+          Copied
+        </span>
+      ) : null}
+      <button
+        ref={buttonRef}
+        type="button"
+        className="mobile-copy-menu__button"
+        aria-label={buttonLabel}
+        aria-expanded={isOpen}
+        aria-haspopup="menu"
+        aria-controls={isOpen ? menuId : undefined}
+        title={buttonLabel}
+        onClick={onToggle}
+      >
+        <EllipsisIcon />
+      </button>
+      {isOpen ? (
+        <div ref={menuRef} id={menuId} className="mobile-copy-menu__popover" role="menu">
+          <button
+            type="button"
+            className="mobile-copy-menu__item"
+            role="menuitem"
+            onClick={onAction}
+          >
+            {actionLabel}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AgendaActionsPanel({
+  actionGroups,
+  completedActionItemCount,
+  isExpanded,
+  onSelectTopic,
+  onToggleActionItemForTopic,
+  onToggleExpanded,
+  openActionItemCount,
+  totalActionItemCount,
+}) {
+  return (
+    <section
+      className={`panel agenda-actions-panel${isExpanded ? ' is-expanded' : ''}`}
+      aria-label="Agenda action items"
+    >
+      <div className="section-header section-header--compact agenda-actions-panel__header">
+        <div>
+          <p>Action Items</p>
+          <h2>Agenda queue</h2>
+        </div>
+        <div className="agenda-actions-panel__header-controls">
+          <strong>{totalActionItemCount}</strong>
+          <button
+            type="button"
+            className="agenda-actions-toggle"
+            aria-expanded={isExpanded}
+            aria-controls="agenda-actions-content"
+            aria-label={isExpanded ? 'Collapse action items' : 'Expand action items'}
+            onClick={onToggleExpanded}
+          >
+            <ChevronIcon expanded={isExpanded} />
+          </button>
+        </div>
+      </div>
+
+      <p className="agenda-actions-summary">
+        {openActionItemCount} open / {completedActionItemCount} done
+      </p>
+
+      {isExpanded ? (
+        actionGroups.length ? (
+          <div id="agenda-actions-content" className="agenda-action-groups">
+            {actionGroups.map((group) => (
+              <section key={group.topicId} className="agenda-action-group">
+                <button
+                  type="button"
+                  className="agenda-action-group__topic"
+                  onClick={() => onSelectTopic(group.topicId)}
+                >
+                  {group.topicName}
+                </button>
+                <div className="agenda-action-group__items">
+                  {group.items.map((action) => (
+                    <label key={action.noteId} className="action-item">
+                      <input
+                        type="checkbox"
+                        checked={action.checked}
+                        onChange={(event) =>
+                          onToggleActionItemForTopic(
+                            group.topicId,
+                            action.noteId,
+                            event.target.checked,
+                          )
+                        }
+                      />
+                      <span>{action.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        ) : (
+          <p id="agenda-actions-content" className="empty-copy">
+            No action items yet across this agenda.
+          </p>
+        )
+      ) : null}
+    </section>
+  );
+}
+
 function ProgressVisual({ percent, themeId, type = 'bar', size = 48 }) {
   const radius = (size - 4) / 2;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (percent / 100) * circumference;
 
-  if (themeId === 'vibrant' && type === 'circular') {
+  if (type === 'circular') {
     return (
-      <div className="progress-circular" style={{ width: size, height: size }}>
+      <div className={`progress-circular theme-${themeId}`} style={{ width: size, height: size }}>
         <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
           <circle
             className="progress-circular__track"
@@ -378,6 +792,204 @@ function ProgressVisual({ percent, themeId, type = 'bar', size = 48 }) {
   );
 }
 
+function TopicProgressTrack({
+  topic,
+  notes = null,
+  themeId,
+  hoveredNoteId,
+  onHoverNote,
+  onLeaveNote,
+  previewedNoteId = null,
+  justSavedNoteId = null,
+  isActive = false,
+  isRunning = false,
+  activeElapsed = 0,
+  className = 'topic-card__progress',
+  hideNotes = false,
+  showTooltips = true,
+}) {
+  if (!topic) {
+    return null;
+  }
+
+  const noteList = Array.isArray(notes) ? notes : topic.notes;
+
+  const aboveLevels = [];
+  const belowLevels = [];
+  
+  const stackedNotes = noteList.map((note, noteIndex) => {
+    const offset = getNoteMarkerOffset(topic, note);
+    const side = noteIndex % 2 === 0 ? 'above' : 'below';
+
+    const isPassing =
+      isActive &&
+      isRunning &&
+      activeElapsed >= note.offsetSeconds &&
+      activeElapsed < note.offsetSeconds + 8;
+    const isHighlighted =
+      hoveredNoteId === note.id || previewedNoteId === note.id || isPassing;
+    const isJustSaved = justSavedNoteId === note.id;
+
+    const isVisibleTooltip = isHighlighted || isJustSaved;
+    
+    let stackLevel = 0;
+    if (isVisibleTooltip) {
+      const levels = side === 'above' ? aboveLevels : belowLevels;
+      while (
+        stackLevel < levels.length &&
+        levels[stackLevel] !== undefined &&
+        Math.abs(offset - levels[stackLevel]) < 3.5
+      ) {
+        stackLevel++;
+      }
+      levels[stackLevel] = offset;
+    }
+
+    return { note, noteIndex, offset, side, stackLevel, isPassing, isHighlighted, isJustSaved };
+  });
+
+  return (
+    <div className={className} aria-hidden="true">
+      {!hideNotes ? (
+        <span className="topic-card__progress-notes">
+          {stackedNotes.map(({ note, noteIndex, offset, side, stackLevel, isPassing, isHighlighted, isJustSaved }) => {
+            const noteEdge = offset <= 16 ? 'start' : offset >= 84 ? 'end' : 'center';
+            const stackOffset = side === 'above' ? stackLevel * -42 : stackLevel * 42;
+
+            return (
+              <span
+                key={note.id}
+                className={`topic-card__progress-note${isHighlighted ? ' is-highlighted' : ''}${isPassing ? ' is-passing' : ''}${isJustSaved ? ' is-just-saved' : ''
+                  }`}
+                data-note-side={side}
+                data-note-edge={noteEdge}
+                style={{ left: `${offset}%`, '--stack-offset': `${stackOffset}px` }}
+                onMouseEnter={() => onHoverNote(note.id)}
+                onMouseLeave={() => onLeaveNote(note.id)}
+              >
+                <span className="topic-card__progress-note-number">{noteIndex + 1}</span>
+                {showTooltips ? <span className="topic-card__progress-tooltip">{note.text}</span> : null}
+              </span>
+            );
+          })}
+        </span>
+      ) : null}
+      <ProgressVisual percent={getTopicProgress(topic)} themeId={themeId} type="bar" />
+    </div>
+  );
+}
+
+function FocusAgendaRing({
+  topics,
+  currentIndex,
+  sessionProgressPercent,
+  remainingSessionSeconds,
+  totalSeconds,
+  isRunning,
+  isMiniMode = false,
+  compact = false,
+  progressOutside = false,
+  className = 'focus-agenda-ring',
+}) {
+  const size = 164;
+  const radius = 70;
+  const outerRadius = radius;
+  const innerRadius = radius - 11;
+  const segmentRadius = progressOutside ? innerRadius : outerRadius;
+  const progressRadius = progressOutside ? outerRadius : innerRadius;
+  const segmentStrokeWidth = progressOutside ? 4.5 : 6;
+  const progressStrokeWidth = progressOutside ? 6 : 2.5;
+  const trackStrokeWidth = progressOutside ? 6 : 6;
+  const circumference = 2 * Math.PI * segmentRadius;
+  const gap = topics.length > 1 ? 7 : 0;
+  const isCondensed = compact || isMiniMode;
+  const totalDuration = Math.max(
+    1,
+    topics.reduce((sum, topic) => sum + Math.max(1, topic.seconds), 0),
+  );
+  const statusLabel = isCondensed
+    ? isRunning
+      ? 'Live'
+      : 'Paused'
+    : isRunning
+      ? 'Agnda live'
+      : 'Agnda paused';
+  const detailLabel = isCondensed
+    ? `${topics.length} topics`
+    : `${formatShortDuration(totalSeconds)} total`;
+  const usableCircumference = Math.max(circumference - gap * topics.length, circumference * 0.66);
+  let consumed = 0;
+
+  const segments = topics.map((topic, index) => {
+    const rawLength = usableCircumference * (Math.max(1, topic.seconds) / totalDuration);
+    const segmentLength = Math.max(rawLength, 10);
+    const segment = {
+      id: topic.id,
+      className:
+        index === currentIndex
+          ? 'is-active'
+          : topic.addressed || index < currentIndex
+            ? 'is-complete'
+            : 'is-upcoming',
+      dasharray: `${segmentLength} ${circumference - segmentLength}`,
+      dashoffset: -consumed,
+    };
+
+    consumed += segmentLength + gap;
+    return segment;
+  });
+
+  return (
+    <div
+      className={`${className}${isCondensed ? ' is-condensed' : ''}`}
+      role="img"
+      aria-label={`Agenda progress ${Math.round(sessionProgressPercent)} percent complete`}
+    >
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle
+          className="focus-agenda-ring__track"
+          cx={size / 2}
+          cy={size / 2}
+          r={progressRadius}
+          fill="none"
+          strokeWidth={trackStrokeWidth}
+        />
+        <circle
+          className="focus-agenda-ring__progress"
+          cx={size / 2}
+          cy={size / 2}
+          r={progressRadius}
+          fill="none"
+          strokeWidth={progressStrokeWidth}
+          strokeDasharray={2 * Math.PI * progressRadius}
+          strokeDashoffset={2 * Math.PI * progressRadius - (sessionProgressPercent / 100) * 2 * Math.PI * progressRadius}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+        {segments.map((segment) => (
+          <circle
+            key={segment.id}
+            className={`focus-agenda-ring__segment ${segment.className}`}
+            cx={size / 2}
+            cy={size / 2}
+            r={segmentRadius}
+            fill="none"
+            strokeWidth={segmentStrokeWidth}
+            strokeLinecap="round"
+            strokeDasharray={segment.dasharray}
+            strokeDashoffset={segment.dashoffset}
+            transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          />
+        ))}
+      </svg>
+      <div className="focus-agenda-ring__center">
+        <span>{statusLabel}</span>
+        <strong>{formatShortDuration(remainingSessionSeconds)}</strong>
+        <small>{detailLabel}</small>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [state, setState] = useState(() => loadInitialState());
   const [themeId, setThemeId] = useState(() => {
@@ -390,17 +1002,56 @@ export default function App() {
   const [savedAgendas, setSavedAgendas] = useState(() => listSavedAgendas());
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isAgendaActionsExpanded, setIsAgendaActionsExpanded] = useState(false);
+  const [isAgendaInfoOpen, setIsAgendaInfoOpen] = useState(false);
   const [newTopicName, setNewTopicName] = useState('');
   const [durationDraft, setDurationDraft] = useState('');
   const [noteDraft, setNoteDraft] = useState('');
   const [editingNoteId, setEditingNoteId] = useState(null);
+  const [isFocusNoteComposerOpen, setIsFocusNoteComposerOpen] = useState(false);
+  const [previewedNoteId, setPreviewedNoteId] = useState(null);
   const [hoveredNoteId, setHoveredNoteId] = useState(null);
+  const [justSavedNoteId, setJustSavedNoteId] = useState(null);
   const [dragState, setDragState] = useState(null);
 
+  useEffect(() => {
+    if (!justSavedNoteId) {
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setJustSavedNoteId(null);
+    }, 1000);
+
+    return () => clearTimeout(timeout);
+  }, [justSavedNoteId]);
+  const [isFocusMode, setIsFocusMode] = useState(false);
+  const [isFocusTaskPanelOpen, setIsFocusTaskPanelOpen] = useState(false);
+  const [isFocusControlsAuxVisible, setIsFocusControlsAuxVisible] = useState(false);
+  const [isMiniMode, setIsMiniMode] = useState(() => detectMiniMode());
+  const [isMobileViewport, setIsMobileViewport] = useState(() => detectMobileViewport());
+  const [isMiniModeDismissed, setIsMiniModeDismissed] = useState(false);
+  const [isSessionPanelMinimized, setIsSessionPanelMinimized] = useState(false);
+  const [isFocusNoteInputFocused, setIsFocusNoteInputFocused] = useState(false);
+  const [focusNoteKeyboardInset, setFocusNoteKeyboardInset] = useState(0);
+  const [openMobileCopyMenu, setOpenMobileCopyMenu] = useState(null);
+  const [copiedMobileCopyScope, setCopiedMobileCopyScope] = useState(null);
+
+  const appShellRef = useRef(null);
   const tickerRef = useRef({ intervalId: null, lastTickMs: Date.now() });
   const renamedAgendaIdRef = useRef('');
+  const agendaInfoButtonRef = useRef(null);
+  const agendaInfoPopoverRef = useRef(null);
+  const topicsCopyButtonRef = useRef(null);
+  const topicsCopyMenuRef = useRef(null);
+  const detailCopyButtonRef = useRef(null);
+  const detailCopyMenuRef = useRef(null);
+  const agendaTitleInputRef = useRef(null);
+  const addTopicInputRef = useRef(null);
   const noteInputRef = useRef(null);
   const detailHeaderRef = useRef(null);
+  const notePreviewTimeoutRef = useRef(null);
+  const focusControlsHideTimeoutRef = useRef(null);
+  const mobileCopyFeedbackTimeoutRef = useRef(null);
   const noteDraftRef = useRef('');
   const draftNoteIdRef = useRef(null);
   const noteDraftOffsetRef = useRef(null);
@@ -436,13 +1087,20 @@ export default function App() {
   const openActionItemCount = totalActionItemCount - completedActionItemCount;
   const todayLabel = formatLongDate();
   const notePlaceholderDate = formatMonthDay();
+  const agendaDisplayName = state.title.trim() || humanizeAgendaId(state.agendaId);
+  const currentAgendaIdentity = state.sourceHash || buildAgendaHash(state.agendaId);
   const currentAgendaCard = {
     agendaId: state.agendaId,
-    hash: buildAgendaHash(state.agendaId),
-    target: buildAgendaHash(state.agendaId),
+    hash: currentAgendaIdentity,
+    target: currentAgendaIdentity,
     firstTopic: topics[0]?.name ?? state.title,
   };
-  const previousSavedAgendas = savedAgendas.filter((agenda) => agenda.agendaId !== state.agendaId);
+  const previousSavedAgendas = savedAgendas.filter((agenda) => {
+    const agendaIdentity =
+      agenda.identityKey ?? agenda.sourceHash ?? agenda.target ?? agenda.hash ?? agenda.agendaId;
+
+    return !(agenda.agendaId === state.agendaId && agendaIdentity === currentAgendaIdentity);
+  });
   const durationOptions =
     selectedTopic && !TOPIC_DURATION_OPTIONS.some((option) => option.seconds === selectedTopic.seconds)
       ? [{ label: formatShortDuration(selectedTopic.seconds), seconds: selectedTopic.seconds }].concat(
@@ -467,13 +1125,59 @@ export default function App() {
   const selectedTopicRemainingSeconds = selectedTopic
     ? Math.max(0, selectedTopic.seconds - selectedTopic.elapsed)
     : 0;
+  const sessionTopic = activeTopic ?? selectedTopic;
+  const sessionTopicRemainingSeconds = sessionTopic
+    ? Math.max(0, sessionTopic.seconds - sessionTopic.elapsed)
+    : 0;
+  const focusTopic = activeTopic;
+  const secondaryFocusTopic = state.secondaryIndex >= 0 ? topics[state.secondaryIndex] : null;
+  const activeFocusTopics = [focusTopic, secondaryFocusTopic].filter(Boolean);
+  
+  const focusNextTopic = currentIndex + 1 < topics.length && currentIndex + 1 !== state.secondaryIndex 
+    ? topics[currentIndex + 1] 
+    : (currentIndex + 2 < topics.length ? topics[currentIndex + 2] : null);
+  const focusQueuedTopics = topics.slice(Math.max(currentIndex, state.secondaryIndex) + 1).filter((t) => !t.addressed && t.id !== focusTopic?.id && t.id !== secondaryFocusTopic?.id);
+  
+  const focusTopicRemainingSeconds = focusTopic
+    ? Math.max(0, focusTopic.seconds - focusTopic.elapsed)
+    : 0;
+  const focusTopicProgressPercent = focusTopic ? getTopicProgress(focusTopic) : 0;
+  const focusActionItems = parseActionItems(focusTopic?.notes).concat(parseActionItems(secondaryFocusTopic?.notes));
+  const renderedSelectedTopicNotes = getRenderableTopicNotes(selectedTopic);
+  const renderedFocusTopicNotes = getRenderableTopicNotes(focusTopic);
+  const renderedSecondaryFocusTopicNotes = getRenderableTopicNotes(secondaryFocusTopic);
+  const isMiniModeActive = isMiniMode && !isMiniModeDismissed;
+  const usesFocusLayout = isFocusMode || isMiniModeActive;
+  const usesMiniVariant = isMiniMode && usesFocusLayout;
+  const isFocusNoteMode = Boolean(
+    usesFocusLayout && (noteDraft || editingNoteId || isFocusNoteComposerOpen),
+  );
+  const isMiniFocusKeyboardActive = Boolean(
+    usesMiniVariant && isFocusNoteMode && isFocusNoteInputFocused,
+  );
+  const showFocusControlsAux = usesMiniVariant || isFocusControlsAuxVisible;
+  const shouldHideTopicCardProgressNotes = Boolean(isAgendaInfoOpen && isMobileViewport);
+  const durationSuggestions = durationOptions.map((option) => option.label);
+  const isTopicsMobileCopyMenuOpen = openMobileCopyMenu === 'topics';
+  const isDetailMobileCopyMenuOpen = openMobileCopyMenu === 'detail';
+  const selectedTopicMarkdown = selectedTopic ? formatTopicMarkdown(selectedTopic) : '';
+  const agendaMarkdown = formatAgendaMarkdown(topics);
   const isEndingSoon = Boolean(
     isSelectedTopicCounting && selectedTopicRemainingSeconds > 0 && selectedTopicRemainingSeconds <= 10,
   );
   const didTopicEnd = Boolean(isSelectedTopicCounting && selectedTopicRemainingSeconds <= 0);
   const sessionProgressPercent =
     totalSeconds > 0 ? Math.min(100, Math.max(0, (totalElapsed / totalSeconds) * 100)) : 0;
-  const activeTheme = THEME_OPTIONS.find((theme) => theme.id === themeId) ?? THEME_OPTIONS[0];
+  const agendaActionsPanelProps = {
+    actionGroups,
+    completedActionItemCount,
+    isExpanded: isAgendaActionsExpanded,
+    onSelectTopic: selectTopic,
+    onToggleActionItemForTopic: toggleActionItemForTopic,
+    onToggleExpanded: () => setIsAgendaActionsExpanded((previous) => !previous),
+    openActionItemCount,
+    totalActionItemCount,
+  };
 
   useEffect(() => {
     const safeIndex = clampIndex(state.currentIndex, topics.length);
@@ -503,6 +1207,25 @@ export default function App() {
   }, [state]);
 
   useEffect(() => {
+    const key = parseAgendaHash(state.sourceHash).kind === 'share'
+      ? state.sourceHash
+      : `agnda:agenda:${state.agendaId}`;
+    function receiveSavedAgenda(event) {
+      if (event.key !== key || !event.newValue) return;
+      try {
+        const incoming = JSON.parse(event.newValue);
+        if (incoming.schemaVersion === 3) {
+          setState((current) => mergeWidgetChanges(current, incoming));
+        }
+      } catch {
+        // Ignore unrelated or incomplete storage writes.
+      }
+    }
+    window.addEventListener('storage', receiveSavedAgenda);
+    return () => window.removeEventListener('storage', receiveSavedAgenda);
+  }, [state.agendaId, state.sourceHash]);
+
+  useEffect(() => {
     if (!globalThis.window) {
       return;
     }
@@ -511,7 +1234,7 @@ export default function App() {
   }, [themeId]);
 
   useEffect(() => {
-    const desiredHash = buildAgendaHash(state.agendaId);
+    const desiredHash = state.sourceHash?.trim() || buildAgendaHash(state.agendaId);
     if (!globalThis.window || window.location.hash === desiredHash) {
       return;
     }
@@ -519,7 +1242,7 @@ export default function App() {
     const url = new URL(window.location.href);
     url.hash = desiredHash;
     window.history.replaceState(null, '', url);
-  }, [state.agendaId]);
+  }, [state.agendaId, state.sourceHash]);
 
   useEffect(() => {
     function handleHashChange() {
@@ -533,9 +1256,23 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const title = state.title.trim() || humanizeAgendaId(state.agendaId);
-    document.title = `${title} | AGNDA`;
-  }, [state.agendaId, state.title]);
+    if (!globalThis.document) {
+      return;
+    }
+
+    const currentTopicName =
+      typeof activeTopic?.name === 'string' && activeTopic.name.trim() ? activeTopic.name.trim() : '';
+
+    document.title = `${currentTopicName || agendaDisplayName} | AGNDA`;
+    setDocumentFavicon(getTopicFaviconHref(activeTopic, state.isRunning));
+  }, [
+    activeTopic?.elapsed,
+    activeTopic?.id,
+    activeTopic?.name,
+    activeTopic?.seconds,
+    agendaDisplayName,
+    state.isRunning,
+  ]);
 
   useEffect(() => {
     if (!state.isRunning) {
@@ -602,8 +1339,246 @@ export default function App() {
   }, [activeTopic?.id, state.isRunning]);
 
   useEffect(() => {
+    if (!globalThis.window) {
+      return undefined;
+    }
+
+    function handleResize() {
+      const detectedMiniMode = detectMiniMode(window);
+      setIsMiniMode(detectedMiniMode);
+      setIsMobileViewport(detectMobileViewport(window));
+
+      if (!detectedMiniMode) {
+        setIsMiniModeDismissed(false);
+      }
+    }
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    if (!isMiniModeActive) {
+      return;
+    }
+
+    setIsDrawerOpen(false);
+
+    const currentTopicId = topics[currentIndex]?.id ?? null;
+    if (!currentTopicId || state.selectedTopicId === currentTopicId) {
+      return;
+    }
+
+    setState((previous) => {
+      const nextTopicId =
+        previous.topics[clampIndex(previous.currentIndex, previous.topics.length)]?.id;
+      if (!nextTopicId || previous.selectedTopicId === nextTopicId) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        selectedTopicId: nextTopicId,
+      };
+    });
+  }, [currentIndex, isMiniModeActive, state.selectedTopicId, topics]);
+
+  useEffect(() => {
+    if (!usesFocusLayout && topics.length === 0) {
+      setIsAgendaInfoOpen(true);
+    }
+  }, [topics.length, usesFocusLayout]);
+
+  useEffect(() => {
+    return () => {
+      if (focusControlsHideTimeoutRef.current) {
+        window.clearTimeout(focusControlsHideTimeoutRef.current);
+      }
+
+      if (notePreviewTimeoutRef.current) {
+        window.clearTimeout(notePreviewTimeoutRef.current);
+      }
+
+      if (mobileCopyFeedbackTimeoutRef.current) {
+        window.clearTimeout(mobileCopyFeedbackTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (usesFocusLayout) {
+      return;
+    }
+
+    if (focusControlsHideTimeoutRef.current) {
+      window.clearTimeout(focusControlsHideTimeoutRef.current);
+      focusControlsHideTimeoutRef.current = null;
+    }
+
+    setIsFocusControlsAuxVisible(false);
+  }, [usesFocusLayout]);
+
+  useEffect(() => {
+    if (!isAgendaInfoOpen || usesFocusLayout || !globalThis.window) {
+      return undefined;
+    }
+
+    const preferredInput = addTopicInputRef.current;
+
+    preferredInput?.focus();
+
+    const frameId = window.requestAnimationFrame(() => {
+      preferredInput?.focus();
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [isAgendaInfoOpen, usesFocusLayout]);
+
+  useEffect(() => {
+    if (!isAgendaInfoOpen || usesFocusLayout || !globalThis.document) {
+      return undefined;
+    }
+
+    function handlePointerDown(event) {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (agendaInfoButtonRef.current?.contains(target)) {
+        return;
+      }
+
+      if (agendaInfoPopoverRef.current?.contains(target)) {
+        return;
+      }
+
+      setIsAgendaInfoOpen(false);
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [isAgendaInfoOpen, usesFocusLayout]);
+
+  useEffect(() => {
+    if (usesFocusLayout || !isMobileViewport) {
+      setOpenMobileCopyMenu(null);
+    }
+  }, [isMobileViewport, usesFocusLayout]);
+
+  useEffect(() => {
+    if (!openMobileCopyMenu || !globalThis.document) {
+      return undefined;
+    }
+
+    const activeButtonRef =
+      openMobileCopyMenu === 'topics' ? topicsCopyButtonRef : detailCopyButtonRef;
+    const activeMenuRef = openMobileCopyMenu === 'topics' ? topicsCopyMenuRef : detailCopyMenuRef;
+
+    function handlePointerDown(event) {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (activeButtonRef.current?.contains(target) || activeMenuRef.current?.contains(target)) {
+        return;
+      }
+
+      setOpenMobileCopyMenu(null);
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [openMobileCopyMenu]);
+
+  useEffect(() => {
+    if (!globalThis.document) {
+      return undefined;
+    }
+
+    function handleFullscreenChange() {
+      if (isFocusMode && !document.fullscreenElement) {
+        setIsFocusMode(false);
+      }
+    }
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, [isFocusMode]);
+
+  useEffect(() => {
     function handleKeyDown(event) {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        if (openMobileCopyMenu && !usesFocusLayout) {
+          event.preventDefault();
+          setOpenMobileCopyMenu(null);
+          return;
+        }
+
+        if (isFocusMode) {
+          event.preventDefault();
+          exitFocusMode();
+          return;
+        }
+
+        if (isAgendaInfoOpen && !usesFocusLayout) {
+          event.preventDefault();
+          setIsAgendaInfoOpen(false);
+          return;
+        }
+
+        setIsDrawerOpen(false);
+        return;
+      }
+
       if (isEditableTarget(event.target)) {
+        return;
+      }
+
+      const lowerKey = event.key.toLowerCase();
+
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && lowerKey === 'c') {
+        const hasSelection = hasMeaningfulDocumentSelection(window, document);
+        const copyScope = event.shiftKey ? 'agenda' : 'topic';
+        const hasCopySource = copyScope === 'agenda' ? Boolean(agendaMarkdown) : Boolean(selectedTopicMarkdown);
+
+        if (hasSelection || !hasCopySource) {
+          return;
+        }
+
+        event.preventDefault();
+        void copyMarkdown(copyScope);
+        return;
+      }
+
+      if (event.code === 'Space') {
+        event.preventDefault();
+        toggleTimer();
+        return;
+      }
+
+      if (!event.metaKey && !event.ctrlKey && !event.altKey && usesFocusLayout && lowerKey === 'j') {
+        event.preventDefault();
+        moveTopicBy(1);
+        return;
+      }
+
+      if (!event.metaKey && !event.ctrlKey && !event.altKey && usesFocusLayout && lowerKey === 'k') {
+        event.preventDefault();
+        moveTopicBy(-1);
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && lowerKey === 'n') {
+        event.preventDefault();
+        const nextTopic = createTopicFromMinutes('New topic', 5);
+        setState((previous) => appendTopicWithoutInterrupting(previous, nextTopic));
         return;
       }
 
@@ -620,26 +1595,21 @@ export default function App() {
         beginNoteCapture(event.key);
         return;
       }
-
-      if (event.code === 'Space') {
-        event.preventDefault();
-        toggleTimer();
-      }
-
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'n') {
-        event.preventDefault();
-        const nextTopic = createTopicFromMinutes('New topic', 5);
-        setState((previous) => appendTopicWithoutInterrupting(previous, nextTopic));
-      }
-
-      if (event.key === 'Escape') {
-        setIsDrawerOpen(false);
-      }
     }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isDrawerOpen, selectedTopic]);
+  }, [
+    activeTopic,
+    isAgendaInfoOpen,
+    agendaMarkdown,
+    isDrawerOpen,
+    isFocusMode,
+    openMobileCopyMenu,
+    selectedTopicMarkdown,
+    topics,
+    usesFocusLayout,
+  ]);
 
   useEffect(() => {
     const pendingCapture = pendingNoteCaptureRef.current;
@@ -651,11 +1621,13 @@ export default function App() {
         offsetSeconds: pendingCapture.offsetSeconds,
       });
       pendingNoteCaptureRef.current = null;
-      window.requestAnimationFrame(() => noteInputRef.current?.focus());
+      focusNoteInput();
       return;
     }
 
+    previewNote(null);
     setEditingNoteId(null);
+    setIsFocusNoteComposerOpen(false);
     setNoteDraft('');
     noteDraftRef.current = '';
     draftNoteIdRef.current = null;
@@ -669,6 +1641,217 @@ export default function App() {
   useEffect(() => {
     setDurationDraft(selectedTopic ? formatShortDuration(selectedTopic.seconds) : '');
   }, [selectedTopic?.id, selectedTopic?.seconds]);
+
+  useEffect(() => {
+    if (!usesFocusLayout) {
+      setIsFocusTaskPanelOpen(false);
+      setIsFocusNoteComposerOpen(false);
+    }
+  }, [usesFocusLayout]);
+
+  useEffect(() => {
+    if (!usesMiniVariant || !isFocusNoteMode || !isFocusNoteInputFocused || !globalThis.window) {
+      setFocusNoteKeyboardInset(0);
+      return undefined;
+    }
+
+    function updateKeyboardInset() {
+      setFocusNoteKeyboardInset(getVisualViewportInset(window));
+    }
+
+    updateKeyboardInset();
+
+    const visualViewport = window.visualViewport;
+    if (!visualViewport) {
+      return undefined;
+    }
+
+    visualViewport.addEventListener('resize', updateKeyboardInset);
+    visualViewport.addEventListener('scroll', updateKeyboardInset);
+
+    return () => {
+      visualViewport.removeEventListener('resize', updateKeyboardInset);
+      visualViewport.removeEventListener('scroll', updateKeyboardInset);
+    };
+  }, [isFocusNoteInputFocused, isFocusNoteMode, usesMiniVariant]);
+
+  useEffect(() => {
+    if (!isFocusNoteMode) {
+      setIsFocusNoteInputFocused(false);
+      setFocusNoteKeyboardInset(0);
+    }
+  }, [isFocusNoteMode]);
+
+  function previewNote(noteId) {
+    if (notePreviewTimeoutRef.current) {
+      window.clearTimeout(notePreviewTimeoutRef.current);
+      notePreviewTimeoutRef.current = null;
+    }
+
+    if (!noteId) {
+      setPreviewedNoteId(null);
+      return;
+    }
+
+    setPreviewedNoteId(noteId);
+    notePreviewTimeoutRef.current = window.setTimeout(() => {
+      setPreviewedNoteId((previous) => (previous === noteId ? null : previous));
+      notePreviewTimeoutRef.current = null;
+    }, 8000);
+  }
+
+  function requestAppFullscreen() {
+    if (!globalThis.document) {
+      return;
+    }
+
+    const target = appShellRef.current;
+    if (!target || typeof target.requestFullscreen !== 'function') {
+      return;
+    }
+
+    if (document.fullscreenElement === target) {
+      return;
+    }
+
+    const request = target.requestFullscreen();
+    if (request && typeof request.catch === 'function') {
+      request.catch(() => {
+        // Ignore browsers that reject fullscreen outside a direct user gesture.
+      });
+    }
+  }
+
+  function leaveAppFullscreen() {
+    if (!globalThis.document || typeof document.exitFullscreen !== 'function') {
+      return;
+    }
+
+    if (!document.fullscreenElement) {
+      return;
+    }
+
+    const exit = document.exitFullscreen();
+    if (exit && typeof exit.catch === 'function') {
+      exit.catch(() => {
+        // Ignore unsupported or already-exiting fullscreen states.
+      });
+    }
+  }
+
+  function enterFocusMode() {
+    const currentTopicId = topics[currentIndex]?.id ?? selectedTopic?.id ?? null;
+
+    if (currentTopicId) {
+      setState((previous) => ({
+        ...previous,
+        selectedTopicId: currentTopicId,
+      }));
+    }
+
+    setIsDrawerOpen(false);
+    setIsAgendaInfoOpen(false);
+    setIsFocusMode(true);
+    requestAppFullscreen();
+  }
+
+  function exitFocusMode() {
+    cancelNoteComposer();
+    setIsFocusTaskPanelOpen(false);
+    clearFocusControlsHideTimeout();
+    setIsFocusControlsAuxVisible(false);
+    setIsFocusMode(false);
+    leaveAppFullscreen();
+  }
+
+  function dismissMiniMode() {
+    cancelNoteComposer();
+    setIsFocusTaskPanelOpen(false);
+    clearFocusControlsHideTimeout();
+    setIsFocusControlsAuxVisible(false);
+    setIsMiniModeDismissed(true);
+    setIsFocusMode(false);
+    leaveAppFullscreen();
+  }
+
+  function clearFocusControlsHideTimeout() {
+    if (!focusControlsHideTimeoutRef.current) {
+      return;
+    }
+
+    window.clearTimeout(focusControlsHideTimeoutRef.current);
+    focusControlsHideTimeoutRef.current = null;
+  }
+
+  function revealFocusControlsAux(options = {}) {
+    const { autoHide = false, delay = 2200 } = options;
+
+    clearFocusControlsHideTimeout();
+    setIsFocusControlsAuxVisible(true);
+
+    if (!autoHide) {
+      return;
+    }
+
+    focusControlsHideTimeoutRef.current = window.setTimeout(() => {
+      setIsFocusControlsAuxVisible(false);
+      focusControlsHideTimeoutRef.current = null;
+    }, delay);
+  }
+
+  function activateTopicFromFocus(topicId) {
+    if (!topicId) {
+      return;
+    }
+
+    setState((previous) => {
+      const nextIndex = previous.topics.findIndex((topic) => topic.id === topicId);
+      if (nextIndex < 0) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        currentIndex: nextIndex,
+        selectedTopicId: topicId,
+        autoAdvance: false,
+        topics: previous.topics.map((topic, index) =>
+          index === nextIndex ? { ...topic, addressed: false } : topic,
+        ),
+      };
+    });
+  }
+
+  function moveTopicBy(delta) {
+    setState((previous) => {
+      if (!previous.topics.length) {
+        return previous;
+      }
+
+      const nextIndex = Math.max(
+        0,
+        Math.min(
+          previous.topics.length - 1,
+          clampIndex(previous.currentIndex, previous.topics.length) + delta,
+        ),
+      );
+      const nextTopicId = previous.topics[nextIndex]?.id ?? previous.selectedTopicId;
+
+      if (nextIndex === previous.currentIndex || !nextTopicId) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        currentIndex: nextIndex,
+        selectedTopicId: nextTopicId,
+        autoAdvance: false,
+        topics: previous.topics.map((topic, index) =>
+          index === nextIndex ? { ...topic, addressed: false } : topic,
+        ),
+      };
+    });
+  }
 
   function updateTopic(topicId, updateFn) {
     setState((previous) => {
@@ -685,16 +1868,217 @@ export default function App() {
 
   function clearNoteComposer() {
     setEditingNoteId(null);
+    setIsFocusNoteComposerOpen(false);
+    setIsFocusNoteInputFocused(false);
+    setFocusNoteKeyboardInset(0);
     setNoteDraft('');
     noteDraftRef.current = '';
     draftNoteIdRef.current = null;
     noteDraftOffsetRef.current = null;
   }
 
+  function cancelNoteComposer() {
+    clearNoteComposer();
+    previewNote(null);
+  }
+
+  function handleNoteInputKeyDown(event) {
+    if (event.key !== 'Escape') {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.blur();
+    cancelNoteComposer();
+  }
+
+  function focusNoteInput(options = {}) {
+    const { sync = false } = options;
+
+    function applyFocus() {
+      const input = noteInputRef.current;
+      if (!input) {
+        return;
+      }
+
+      try {
+        input.focus({ preventScroll: true });
+      } catch {
+        input.focus();
+      }
+
+      if (typeof input.setSelectionRange === 'function') {
+        const cursorPosition = input.value.length;
+        input.setSelectionRange(cursorPosition, cursorPosition);
+      }
+    }
+
+    if (sync) {
+      applyFocus();
+      return;
+    }
+
+    window.requestAnimationFrame(applyFocus);
+  }
+
+  function closeMiniFocusTaskPanel() {
+    if (usesMiniVariant) {
+      setIsFocusTaskPanelOpen(false);
+    }
+  }
+
+  function handleFocusNoteInputFocus() {
+    closeMiniFocusTaskPanel();
+    setIsFocusNoteInputFocused(true);
+  }
+
+  function handleFocusNoteInputBlur() {
+    setIsFocusNoteInputFocused(false);
+  }
+
+  function handleFocusChecklistShortcutPointerDown(event) {
+    event.preventDefault();
+  }
+
+  function showMobileCopyFeedback(scope) {
+    if (mobileCopyFeedbackTimeoutRef.current) {
+      window.clearTimeout(mobileCopyFeedbackTimeoutRef.current);
+    }
+
+    setCopiedMobileCopyScope(scope);
+    mobileCopyFeedbackTimeoutRef.current = window.setTimeout(() => {
+      setCopiedMobileCopyScope((previous) => (previous === scope ? null : previous));
+      mobileCopyFeedbackTimeoutRef.current = null;
+    }, 1800);
+  }
+
+  async function copyMarkdown(scope, options = {}) {
+    const { feedbackScope = null } = options;
+    const markdown = scope === 'agenda' ? agendaMarkdown : selectedTopicMarkdown;
+
+    if (!markdown) {
+      return false;
+    }
+
+    const didCopy = await writeTextToClipboard(markdown, {
+      navigatorRef: globalThis.window?.navigator ?? globalThis.navigator,
+      documentRef: globalThis.document,
+    });
+    if (!didCopy) {
+      return false;
+    }
+
+    if (feedbackScope) {
+      showMobileCopyFeedback(feedbackScope);
+    }
+
+    return true;
+  }
+
+  function toggleMobileCopyMenu(scope) {
+    if (scope === 'topics') {
+      setIsAgendaInfoOpen(false);
+    }
+
+    setOpenMobileCopyMenu((previous) => (previous === scope ? null : scope));
+  }
+
+  async function handleMobileCopyAction(scope, feedbackScope) {
+    setOpenMobileCopyMenu(null);
+    await copyMarkdown(scope, { feedbackScope });
+  }
+
+  function openFocusNoteComposer() {
+    const targetTopic = focusTopic ?? selectedTopic;
+    if (!targetTopic) {
+      return;
+    }
+
+    closeMiniFocusTaskPanel();
+
+    if (selectedTopic?.id !== targetTopic.id) {
+      pendingNoteCaptureRef.current = {
+        topicId: targetTopic.id,
+        initialValue: '',
+        offsetSeconds: noteDraftOffsetRef.current ?? targetTopic.elapsed,
+      };
+      flushSync(() => {
+        setIsFocusNoteComposerOpen(true);
+        setState((previous) => ({
+          ...previous,
+          selectedTopicId: targetTopic.id,
+        }));
+      });
+      focusNoteInput({ sync: true });
+      focusNoteInput();
+      return;
+    }
+
+    flushSync(() => {
+      setIsFocusNoteComposerOpen(true);
+    });
+
+    if (
+      !editingNoteId &&
+      !noteDraftRef.current &&
+      noteDraftOffsetRef.current === null &&
+      targetTopic
+    ) {
+      noteDraftOffsetRef.current = targetTopic.elapsed;
+    }
+
+    focusNoteInput({ sync: true });
+    focusNoteInput();
+  }
+
+  function insertFocusChecklistMarker() {
+    const targetTopic = focusTopic ?? selectedTopic;
+    if (!targetTopic) {
+      return;
+    }
+
+    const input = noteInputRef.current;
+    const currentValue = noteDraftRef.current;
+    const checklistPrefix = '- [ ] ';
+    const hasChecklistPrefix = currentValue.startsWith(checklistPrefix);
+    const selectionStart =
+      typeof input?.selectionStart === 'number' ? input.selectionStart : currentValue.length;
+    const selectionEnd =
+      typeof input?.selectionEnd === 'number' ? input.selectionEnd : selectionStart;
+    const nextValue = hasChecklistPrefix
+      ? currentValue.slice(checklistPrefix.length)
+      : `${checklistPrefix}${currentValue}`;
+    const cursorOffset = hasChecklistPrefix ? -checklistPrefix.length : checklistPrefix.length;
+    const nextSelectionStart = Math.max(0, selectionStart + cursorOffset);
+    const nextSelectionEnd = Math.max(0, selectionEnd + cursorOffset);
+
+    closeMiniFocusTaskPanel();
+
+    if (!editingNoteId && noteDraftOffsetRef.current === null) {
+      noteDraftOffsetRef.current = targetTopic.elapsed;
+    }
+
+    updateNoteDraft(nextValue, {
+      topicId: targetTopic.id,
+      offsetSeconds: noteDraftOffsetRef.current ?? targetTopic.elapsed,
+    });
+
+    window.requestAnimationFrame(() => {
+      focusNoteInput({ sync: true });
+      noteInputRef.current?.setSelectionRange(nextSelectionStart, nextSelectionEnd);
+    });
+  }
+
   function resetTransientUi() {
+    exitFocusMode();
     setIsDrawerOpen(false);
+    setIsAgendaInfoOpen(false);
+    setOpenMobileCopyMenu(null);
+    setCopiedMobileCopyScope(null);
     setNewTopicName('');
     clearNoteComposer();
+    previewNote(null);
     setHoveredNoteId(null);
     setDragState(null);
     pendingDetailScrollTopicIdRef.current = null;
@@ -843,7 +2227,8 @@ export default function App() {
       return;
     }
 
-    noteInputRef.current?.focus();
+    focusNoteInput({ sync: true });
+    focusNoteInput();
     if (!noteDraftRef.current) {
       noteDraftOffsetRef.current = targetTopic.elapsed;
     }
@@ -865,6 +2250,7 @@ export default function App() {
     setNoteDraft(value);
 
     if (editingNoteId) {
+      previewNote(editingNoteId);
       return;
     }
 
@@ -872,56 +2258,57 @@ export default function App() {
       noteDraftOffsetRef.current = offsetSeconds;
     }
 
-    if (!topicId) {
-      if (!hasMeaningfulText) {
-        noteDraftOffsetRef.current = null;
-      }
-      return;
-    }
-
     if (!hasMeaningfulText) {
-      if (draftNoteIdRef.current) {
-        const draftNoteId = draftNoteIdRef.current;
-        updateTopic(topicId, (topic) => ({
-          ...topic,
-          notes: topic.notes.filter((note) => note.id !== draftNoteId),
-        }));
-        draftNoteIdRef.current = null;
-      }
-
+      previewNote(null);
+      draftNoteIdRef.current = null;
       noteDraftOffsetRef.current = null;
       return;
     }
 
     if (!draftNoteIdRef.current) {
-      const noteId = makeEntityId('note');
-      draftNoteIdRef.current = noteId;
-      updateTopic(topicId, (topic) => ({
-        ...topic,
-        notes: [
-          ...topic.notes,
-          {
-            id: noteId,
-            text: value,
-            offsetSeconds: Number.isFinite(offsetSeconds) ? offsetSeconds : topic.elapsed,
-          },
-        ],
-      }));
+      draftNoteIdRef.current = makeEntityId('note');
+    }
+
+    if (!topicId) {
       return;
     }
 
-    const draftNoteId = draftNoteIdRef.current;
-    updateTopic(topicId, (topic) => ({
-      ...topic,
-      notes: topic.notes.map((note) =>
-        note.id === draftNoteId
+    previewNote(draftNoteIdRef.current);
+  }
+
+  function getRenderableTopicNotes(topic) {
+    if (!topic) {
+      return [];
+    }
+
+    const notes = Array.isArray(topic.notes) ? topic.notes : [];
+    if (topic.id !== selectedTopic?.id) {
+      return notes;
+    }
+
+    if (editingNoteId) {
+      return notes.map((note) =>
+        note.id === editingNoteId
           ? {
             ...note,
-            text: value,
+            text: noteDraft,
           }
           : note,
-      ),
-    }));
+      );
+    }
+
+    if (!noteDraft.trim() || !draftNoteIdRef.current) {
+      return notes;
+    }
+
+    return notes.concat({
+      id: draftNoteIdRef.current,
+      text: noteDraft,
+      offsetSeconds:
+        Number.isFinite(noteDraftOffsetRef.current) && noteDraftOffsetRef.current !== null
+          ? noteDraftOffsetRef.current
+          : topic.elapsed,
+    });
   }
 
   function selectTopic(topicId) {
@@ -956,6 +2343,7 @@ export default function App() {
     setState((previous) => appendTopicWithoutInterrupting(previous, nextTopic));
 
     setNewTopicName('');
+    setIsAgendaInfoOpen(false);
   }
 
   function handleAddTopic(event) {
@@ -970,10 +2358,17 @@ export default function App() {
         renamedAgendaIdRef.current = previous.agendaId;
       }
 
+      const previousSlugHash = buildAgendaHash(previous.agendaId);
+      const nextSourceHash =
+        previous.sourceHash === previousSlugHash
+          ? buildAgendaHash(nextAgendaId)
+          : previous.sourceHash;
+
       return {
         ...previous,
         title: value,
         agendaId: nextAgendaId,
+        sourceHash: nextSourceHash,
       };
     });
   }
@@ -1084,6 +2479,17 @@ export default function App() {
     }));
   }
 
+  function handleDurationDraftChange(value) {
+    setDurationDraft(value);
+
+    const presetMatch = durationOptions.find(
+      (option) => option.label.toLowerCase() === value.trim().toLowerCase(),
+    );
+    if (presetMatch) {
+      updateSelectedTopicDuration(presetMatch.seconds);
+    }
+  }
+
   function commitDurationDraft() {
     if (!selectedTopic) {
       return;
@@ -1111,6 +2517,9 @@ export default function App() {
     }
 
     const draftNoteId = draftNoteIdRef.current;
+    const previewNoteTargetId = editingNoteId ?? draftNoteId ?? makeEntityId('note');
+
+    setJustSavedNoteId(previewNoteTargetId);
 
     updateTopic(selectedTopic.id, (topic) => {
       if (editingNoteId) {
@@ -1133,7 +2542,21 @@ export default function App() {
           notes: [
             ...topic.notes,
             {
-              id: makeEntityId('note'),
+              id: previewNoteTargetId,
+              text,
+              offsetSeconds: noteDraftOffsetRef.current ?? topic.elapsed,
+            },
+          ],
+        };
+      }
+
+      if (!topic.notes.some((note) => note.id === draftNoteId)) {
+        return {
+          ...topic,
+          notes: [
+            ...topic.notes,
+            {
+              id: draftNoteId,
               text,
               offsetSeconds: noteDraftOffsetRef.current ?? topic.elapsed,
             },
@@ -1154,6 +2577,7 @@ export default function App() {
       };
     });
 
+    previewNote(previewNoteTargetId);
     clearNoteComposer();
   }
 
@@ -1172,7 +2596,7 @@ export default function App() {
     draftNoteIdRef.current = null;
     noteDraftOffsetRef.current = note.offsetSeconds;
     setNoteDraft(note.text);
-    window.requestAnimationFrame(() => noteInputRef.current?.focus());
+    focusNoteInput();
   }
 
   function deleteNote(noteId) {
@@ -1188,6 +2612,10 @@ export default function App() {
       ...topic,
       notes: topic.notes.filter((note) => note.id !== noteId),
     }));
+
+    if (previewedNoteId === noteId) {
+      previewNote(null);
+    }
   }
 
   function toggleActionItemForTopic(topicId, noteId, checked) {
@@ -1224,6 +2652,14 @@ export default function App() {
     }
 
     setState((previous) => activateTopicManually(previous, selectedTopic.id));
+  }
+
+  function revisitSecondaryTopic() {
+    if (!selectedTopic) {
+      return;
+    }
+
+    setState((previous) => activateSecondaryTopicManually(previous, selectedTopic.id));
   }
 
   function markAddressed() {
@@ -1299,7 +2735,7 @@ export default function App() {
     resetTransientUi();
     setState(loadedAgenda);
     setSavedAgendas(listSavedAgendas(window.localStorage));
-    replaceHash(agenda?.hash || buildAgendaHash(loadedAgenda.agendaId));
+    replaceHash(loadedAgenda.sourceHash || agenda?.hash || buildAgendaHash(loadedAgenda.agendaId));
   }
 
   function createNewAgenda() {
@@ -1323,7 +2759,7 @@ export default function App() {
     renamedAgendaIdRef.current = '';
     resetTransientUi();
     setState(nextState);
-    replaceHash(buildAgendaHash(agendaId));
+    replaceHash(nextState.sourceHash || buildAgendaHash(agendaId));
   }
 
   function removeSavedAgenda(agenda) {
@@ -1380,7 +2816,394 @@ export default function App() {
   }
 
   return (
-    <main className={`app-shell theme-${themeId}`}>
+    <main
+      ref={appShellRef}
+      className={`app-shell theme-${themeId}${usesFocusLayout ? ' is-focus-mode' : ''}${usesMiniVariant ? ' is-mini-mode' : ''}`}
+    >
+      {usesFocusLayout ? (
+        <section
+          className={`focus-mode${usesMiniVariant ? ' is-mini' : ''}${isMiniFocusKeyboardActive ? ' is-keyboard-active' : ''}`}
+          style={{ '--mini-focus-keyboard-inset': `${focusNoteKeyboardInset}px` }}
+        >
+          <FocusAgendaRing
+            topics={topics}
+            currentIndex={currentIndex}
+            sessionProgressPercent={sessionProgressPercent}
+            remainingSessionSeconds={remainingSessionSeconds}
+            totalSeconds={totalSeconds}
+            isRunning={state.isRunning}
+            progressOutside
+            isMiniMode={usesMiniVariant}
+          />
+
+          <section className="focus-mode__hero">
+            {activeFocusTopics.length > 0 ? (
+              <div className="focus-mode__topic-shell">
+                {activeFocusTopics.map((topic, _idx, arr) => {
+                  const isPrimary = topic.id === focusTopic?.id;
+                  const remainingSecs = Math.max(0, topic.seconds - topic.elapsed);
+                  const trackNotes = isPrimary ? renderedFocusTopicNotes : renderedSecondaryFocusTopicNotes;
+                  const previewNote =
+                    trackNotes.find((note) => note.id === hoveredNoteId) ??
+                    trackNotes.find((note) => note.id === previewedNoteId) ??
+                    trackNotes.find((note) => note.id === justSavedNoteId) ??
+                    (state.isRunning
+                      ? trackNotes.find((note) => topic.elapsed >= note.offsetSeconds && topic.elapsed < note.offsetSeconds + 8)
+                      : null);
+                  const previewNoteIndex = previewNote
+                    ? trackNotes.findIndex((note) => note.id === previewNote.id) + 1
+                    : 0;
+                  return (
+                    <div key={topic.id} className={`focus-mode__topic-layer${arr.length > 1 ? ' is-dual' : ''}`} style={{ marginBottom: arr.length > 1 && isPrimary ? '2rem' : '0' }}>
+                      <div className="focus-mode__topic-copy">
+                        <p className="focus-mode__eyebrow">
+                          {usesMiniVariant ? 'Mini mode' : 'Focus mode'}
+                        </p>
+                        <h1>{topic.name}</h1>
+                        <div className="focus-mode__time-row">
+                          <strong>{formatClock(remainingSecs)}</strong>
+                          <span>
+                            {state.isRunning ? 'Live topic' : 'Paused topic'}
+                            {usesMiniVariant ? '' : ` · ${formatShortDuration(topic.seconds)}`}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="focus-mode__progress-wrap">
+                        <TopicProgressTrack
+                          topic={topic}
+                          notes={trackNotes}
+                          themeId={themeId}
+                          hoveredNoteId={hoveredNoteId}
+                          onHoverNote={setHoveredNoteId}
+                          onLeaveNote={(noteId) =>
+                            setHoveredNoteId((previous) => (previous === noteId ? null : previous))
+                          }
+                          previewedNoteId={previewedNoteId}
+                          justSavedNoteId={justSavedNoteId}
+                          isActive
+                          isRunning={state.isRunning}
+                          activeElapsed={topic.elapsed}
+                          className="focus-mode__topic-progress"
+                          showTooltips={false}
+                        />
+                        <button
+                          type="button"
+                          className={`focus-mode__note-trigger${state.isRunning ? ' is-breathing' : ''}${usesMiniVariant || isFocusNoteMode ? ' is-visible' : ''}`}
+                          onClick={() => {
+                            if (topic.id !== selectedTopic?.id) {
+                              selectTopic(topic.id);
+                            }
+                            openFocusNoteComposer();
+                          }}
+                          style={{ '--focus-progress-percent': `${getTopicProgress(topic)}` }}
+                          aria-label={`Add note to ${topic.name}`}
+                          title={`Add note to ${topic.name}`}
+                        >
+                          <svg
+                            className="focus-mode__note-trigger-shape"
+                            viewBox="0 0 48 48"
+                            aria-hidden="true"
+                          >
+                            <path d="M24 2C18.2 8.1 12 13.7 12 28A12 12 0 0 0 36 28C36 13.7 29.8 8.1 24 2Z" />
+                          </svg>
+                          <span className="focus-mode__note-trigger-icon" aria-hidden="true">
+                            <PlusIcon />
+                          </span>
+                        </button>
+                      </div>
+                      <div className="focus-mode__note-preview" aria-live="polite" aria-atomic="true">
+                        <span className="focus-mode__note-preview-label">
+                          {previewNote ? `Note ${String(previewNoteIndex).padStart(2, '0')}` : `${String(trackNotes.length).padStart(2, '0')} notes`}
+                        </span>
+                        <span className="focus-mode__note-preview-text" title={previewNote?.text}>
+                          {previewNote ? previewNote.text : 'Notes appear here as the session progresses.'}
+                        </span>
+                        {previewNote ? (
+                          <span className="focus-mode__note-preview-time">
+                            {formatMinuteSecond(previewNote.offsetSeconds)}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+                
+                <div className="focus-mode__note-layer">
+                  <form
+                    className={`focus-mode__note-composer${isFocusNoteMode ? ' is-active' : ''}`}
+                    onSubmit={addNote}
+                    autoComplete="off"
+                  >
+                    <label className="sr-only" htmlFor="focus-note-input">
+                      Focus note
+                    </label>
+                    <div className="focus-mode__note-input-shell" style={{ position: 'relative' }}>
+                      {usesMiniVariant && isFocusNoteMode ? (
+                        <button
+                          type="button"
+                          className="focus-mode__note-shortcut"
+                          aria-label="Insert checklist item"
+                          title="Insert checklist item"
+                          onPointerDown={handleFocusChecklistShortcutPointerDown}
+                          onClick={insertFocusChecklistMarker}
+                        >
+                          <code>[ ]</code>
+                        </button>
+                      ) : null}
+                      <input
+                        id="focus-note-input"
+                        ref={noteInputRef}
+                        className={`focus-mode__note-input${isFocusNoteMode ? ' is-visible' : ' is-hidden'}${usesMiniVariant && isFocusNoteMode ? ' has-shortcut' : ''
+                          }`}
+                        type="text"
+                        autoComplete="off"
+                        value={noteDraft}
+                        onChange={(event) => updateNoteDraft(event.target.value)}
+                        onKeyDown={handleNoteInputKeyDown}
+                        onFocus={handleFocusNoteInputFocus}
+                        onBlur={handleFocusNoteInputBlur}
+                        placeholder={isEditingNote ? 'Edit note' : 'Capture a focus note'}
+                      />
+                    </div>
+                    {isFocusNoteMode ? (
+                      <>
+                        <button
+                          type="submit"
+                          className={`focus-mode__note-submit${usesMiniVariant ? ' is-icon-only' : ''}`}
+                          aria-label="Save note"
+                          title="Save note"
+                        >
+                          {usesMiniVariant ? <CheckIcon /> : 'Save note'}
+                        </button>
+                      </>
+                    ) : null}
+                  </form>
+
+                  {!isFocusNoteMode ? (
+                    <p className="focus-mode__hint">
+                      {usesMiniVariant
+                        ? 'Type for notes. Space toggles play. J/K move topics.'
+                        : 'Type to capture a note. Space plays or pauses. J and K move between topics. Esc exits focus mode.'}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <div className="focus-mode__empty">
+                <p>No topic selected</p>
+                <strong>Add a topic to start focus mode.</strong>
+              </div>
+            )}
+          </section>
+
+          {focusTopic ? (
+            <aside
+              className={`focus-task-panel${isFocusTaskPanelOpen ? ' is-open' : ''}`}
+              aria-label="Current topic tasks"
+            >
+              <div
+                id="focus-task-panel-sheet"
+                className="focus-task-panel__sheet"
+                aria-hidden={!isFocusTaskPanelOpen}
+              >
+                <div className="focus-task-panel__header">
+                  <p>Topic tasks</p>
+                  <strong>{focusTopic.name}</strong>
+                </div>
+
+                {focusActionItems.length ? (
+                  <div className="focus-task-panel__items">
+                    {focusActionItems.map((action) => (
+                      <label key={action.noteId} className="action-item">
+                        <input
+                          type="checkbox"
+                          checked={action.checked}
+                          onChange={(event) =>
+                            toggleActionItemForTopic(
+                              focusTopic.id,
+                              action.noteId,
+                              event.target.checked,
+                            )
+                          }
+                        />
+                        <span>{action.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="empty-copy">
+                    Add markdown todos like <code>- [ ] Follow up</code> in notes to reveal
+                    checkboxes here.
+                  </p>
+                )}
+              </div>
+
+              <button
+                type="button"
+                className="focus-task-panel__toggle"
+                aria-expanded={isFocusTaskPanelOpen}
+                aria-controls="focus-task-panel-sheet"
+                aria-label={isFocusTaskPanelOpen ? 'Hide topic tasks' : 'Show topic tasks'}
+                title="Topic tasks"
+                onClick={() => setIsFocusTaskPanelOpen((previous) => !previous)}
+              >
+                <TaskListIcon />
+                <span>{focusActionItems.length}</span>
+              </button>
+            </aside>
+          ) : null}
+
+          <div
+            className={`focus-mode__floating-controls${showFocusControlsAux ? ' is-aux-visible' : ''}`}
+            role="toolbar"
+            aria-label="Focus mode controls"
+            onMouseEnter={() => revealFocusControlsAux()}
+            onMouseLeave={() => {
+              clearFocusControlsHideTimeout();
+              setIsFocusControlsAuxVisible(false);
+            }}
+            onFocusCapture={() => revealFocusControlsAux()}
+            onBlurCapture={(event) => {
+              const nextTarget = event.relatedTarget;
+              if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+                return;
+              }
+
+              clearFocusControlsHideTimeout();
+              setIsFocusControlsAuxVisible(false);
+            }}
+            onPointerDown={(event) => {
+              if (event.pointerType !== 'mouse' && !usesMiniVariant) {
+                revealFocusControlsAux({ autoHide: true, delay: 3200 });
+              }
+            }}
+          >
+            <button
+              type="button"
+              className="focus-mode__control"
+              onClick={() => moveTopicBy(-1)}
+              disabled={currentIndex <= 0}
+              aria-label="Go to previous topic"
+              title="Previous topic (K)"
+            >
+              <ArrowIcon direction="left" />
+            </button>
+            <button
+              type="button"
+              className="focus-mode__control"
+              onClick={resetSelectedTopic}
+              disabled={!focusTopic || focusTopic.elapsed <= 0}
+              aria-label="Reset current topic"
+              title="Reset topic"
+            >
+              <ResetIcon />
+            </button>
+            <button
+              type="button"
+              className={`focus-mode__control focus-mode__control--primary${state.isRunning ? ' is-running' : ''}`}
+              onClick={toggleTimer}
+              aria-label={state.isRunning ? 'Pause session' : 'Start session'}
+              title={state.isRunning ? 'Pause session (Space)' : 'Start session (Space)'}
+            >
+              <PlayPauseIcon isRunning={state.isRunning} />
+            </button>
+            <button
+              type="button"
+              className="focus-mode__control focus-mode__control--success"
+              onClick={markAddressed}
+              disabled={!focusTopic}
+              aria-label="Mark current topic addressed"
+              title="Mark topic addressed"
+            >
+              <CheckIcon />
+            </button>
+            <button
+              type="button"
+              className="focus-mode__control"
+              onClick={() => moveTopicBy(1)}
+              disabled={!topics.length || currentIndex >= topics.length - 1}
+              aria-label="Go to next topic"
+              title="Next topic (J)"
+            >
+              <ArrowIcon direction="right" />
+            </button>
+            {showFocusControlsAux ? (
+              <label className="focus-mode__auto-next-toggle">
+                <input
+                  type="checkbox"
+                  checked={state.autoAdvance}
+                  onChange={(event) =>
+                    setState((previous) => ({ ...previous, autoAdvance: event.target.checked }))
+                  }
+                  aria-label="Auto Next Topic"
+                />
+                <span>Auto next</span>
+              </label>
+            ) : null}
+          </div>
+
+          <section className="focus-mode__dock" aria-label="Upcoming topics">
+            <div className="focus-mode__dock-inner">
+              {focusNextTopic ? (
+                <button
+                  type="button"
+                  className="focus-topic-card focus-topic-card--next"
+                  onClick={() => activateTopicFromFocus(focusNextTopic.id)}
+                >
+                  <span className="focus-topic-card__eyebrow">{usesMiniVariant ? 'Next' : 'Up next'}</span>
+                  <strong>{focusNextTopic.name}</strong>
+                  <span className="focus-topic-card__meta">
+                    {usesMiniVariant
+                      ? `T${currentIndex + 2} · ${formatShortDuration(focusNextTopic.seconds)}`
+                      : `${formatShortDuration(focusNextTopic.seconds)} · Topic ${currentIndex + 2}`}
+                  </span>
+                </button>
+              ) : (
+                <div className="focus-topic-card focus-topic-card--next is-empty">
+                  <span className="focus-topic-card__eyebrow">{usesMiniVariant ? 'Next' : 'Up next'}</span>
+                  <strong>No more queued topics</strong>
+                  <span className="focus-topic-card__meta">You’ve reached the end of this agnda.</span>
+                </div>
+              )}
+
+              {!usesMiniVariant && focusQueuedTopics.length ? (
+                <div className="focus-mode__queue">
+                  {focusQueuedTopics.map((topic, index) => (
+                    <button
+                      key={topic.id}
+                      type="button"
+                      className="focus-topic-card focus-topic-card--queued"
+                      onClick={() => activateTopicFromFocus(topic.id)}
+                    >
+                      <span className="focus-topic-card__eyebrow">Later</span>
+                      <strong>{topic.name}</strong>
+                      <span className="focus-topic-card__meta">
+                        {usesMiniVariant
+                          ? `T${currentIndex + index + 3} · ${formatShortDuration(topic.seconds)}`
+                          : `${formatShortDuration(topic.seconds)} · Topic ${currentIndex + index + 3}`}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </section>
+
+          {usesMiniVariant ? (
+            <button
+              type="button"
+              className="mini-mode-dismiss"
+              onClick={dismissMiniMode}
+              aria-label="Exit mini mode"
+              title="Exit mini mode"
+            >
+              <CloseIcon />
+            </button>
+          ) : null}
+        </section>
+      ) : (
+        <>
       <button
         type="button"
         className="menu-toggle"
@@ -1537,179 +3360,177 @@ export default function App() {
       }
 
       <section className="workspace">
-        <section className="workspace-top">
-          <div className="panel brand-panel top-card title-card">
-            <p className="brand-kicker">AGNDA</p>
-            <p className="brand-date">{todayLabel}</p>
-            <label className="title-field">
-              <span className="sr-only">Agenda title</span>
-              <input
-                type="text"
-                value={state.title}
-                onChange={(event) => updateTitle(event.target.value)}
-                onBlur={normalizeTitleOnBlur}
-                placeholder="Name this agnda"
-              />
-            </label>
-
-            <form className="add-topic-form" onSubmit={handleAddTopic}>
-              <input
-                type="text"
-                value={newTopicName}
-                onChange={(event) => setNewTopicName(event.target.value)}
-                placeholder="Add a topic"
-              />
-              <button type="submit">Add</button>
-            </form>
-          </div>
-
-          <div
-            className={`panel session-panel top-card time-card${isEndingSoon ? ' is-ending-soon' : ''}${didTopicEnd ? ' is-ended' : ''
-              }`}
-          >
-            <div className="section-header section-header--compact">
-              <div>
-                <p>Session clock</p>
-                <h2>Time so far</h2>
-              </div>
-              <strong>{formatShortDuration(totalElapsed)}</strong>
-            </div>
-
-            <div className="time-card__focus">
-              <span>{selectedTopic ? 'Current topic remaining' : 'No topic selected'}</span>
-              <strong>{selectedTopic ? formatClock(selectedTopicRemainingSeconds) : '--:--'}</strong>
-            </div>
-
-            <ProgressVisual
-              percent={sessionProgressPercent}
-              themeId={themeId}
-              type={themeId === 'vibrant' ? 'circular' : 'bar'}
-              size={120}
-            />
-
-            <div className="metric-row">
-              <span>Total</span>
-              <strong>{formatShortDuration(totalSeconds)}</strong>
-            </div>
-            <div className="metric-row">
-              <span>Remaining</span>
-              <strong>{formatShortDuration(remainingSessionSeconds)}</strong>
-            </div>
-            <div className="session-controls">
-              <label className="toggle-row">
-                <input
-                  type="checkbox"
-                  checked={state.autoAdvance}
-                  onChange={(event) =>
-                    setState((previous) => ({ ...previous, autoAdvance: event.target.checked }))
-                  }
-                />
-                <span>Auto-advance topic</span>
-              </label>
-              <button type="button" className="primary-button" onClick={toggleTimer}>
-                {state.isRunning ? 'Pause session' : 'Start session'}
-              </button>
-            </div>
-          </div>
-
-        </section>
-
         <section className="workspace-main">
           <section className="column column-topics">
             <div className="panel topics-panel">
-              <div className="section-header">
-                <div>
-                  <p>Topics</p>
-                  <h2>Today&apos;s flow</h2>
+              <div className="section-header topics-panel__header">
+                <div className="topics-panel__branding">
+                  <p className="topics-panel__kicker">Agnda</p>
+                  <div className="topics-panel__identity-row">
+                    <h2>{agendaDisplayName}</h2>
+
+                    <div className="topics-panel__info-anchor">
+                      <button
+                        ref={agendaInfoButtonRef}
+                        type="button"
+                        className="topics-panel__info-button"
+                        aria-expanded={isAgendaInfoOpen}
+                        aria-controls="agenda-info-popover"
+                        aria-label={isAgendaInfoOpen ? 'Hide agenda info' : 'Show agenda info'}
+                        title="Agenda info"
+                        onClick={() => {
+                          setOpenMobileCopyMenu(null);
+                          setIsAgendaInfoOpen((previous) => !previous);
+                        }}
+                      >
+                        <InfoIcon />
+                      </button>
+
+                      {isAgendaInfoOpen ? (
+                        <div
+                          ref={agendaInfoPopoverRef}
+                          id="agenda-info-popover"
+                          className="topics-panel__info-popover"
+                          role="dialog"
+                          aria-labelledby="agenda-info-title"
+                        >
+                          <div className="topics-panel__info-header">
+                            <div className="topics-panel__info-copy">
+                              <p className="topics-panel__info-date">{todayLabel}</p>
+                              <h3 id="agenda-info-title">Agenda info</h3>
+                            </div>
+                            <button
+                              type="button"
+                              className="topics-panel__info-close"
+                              onClick={() => setIsAgendaInfoOpen(false)}
+                              aria-label="Close agenda info"
+                              title="Close agenda info"
+                            >
+                              <CloseIcon />
+                            </button>
+                          </div>
+
+                          <label className="title-field">
+                            <span className="sr-only">Agenda title</span>
+                            <input
+                              ref={agendaTitleInputRef}
+                              type="text"
+                              value={state.title}
+                              onChange={(event) => updateTitle(event.target.value)}
+                              onBlur={normalizeTitleOnBlur}
+                              placeholder="Name this agnda"
+                            />
+                          </label>
+
+                          <form className="add-topic-form" onSubmit={handleAddTopic}>
+                            <input
+                              ref={addTopicInputRef}
+                              type="text"
+                              value={newTopicName}
+                              onChange={(event) => setNewTopicName(event.target.value)}
+                              placeholder="Add a topic"
+                            />
+                            <button type="submit">Add</button>
+                          </form>
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <span className="topics-panel__label">• Topics</span>
+                  </div>
                 </div>
-                <strong>{topics.length}</strong>
+                <div className="topics-panel__header-controls">
+                  <strong>{topics.length}</strong>
+                  {isMobileViewport ? (
+                    <MobileCopyMenu
+                      buttonRef={topicsCopyButtonRef}
+                      menuRef={topicsCopyMenuRef}
+                      copied={copiedMobileCopyScope === 'topics'}
+                      isOpen={isTopicsMobileCopyMenuOpen}
+                      menuId="topics-copy-menu"
+                      buttonLabel="Show agenda copy actions"
+                      actionLabel="Copy all topics markdown"
+                      onToggle={() => toggleMobileCopyMenu('topics')}
+                      onAction={() => handleMobileCopyAction('agenda', 'topics')}
+                    />
+                  ) : null}
+                </div>
               </div>
 
-              <div className="topic-list" role="list" aria-label="Agenda topics">
-                {topics.map((topic) => {
-                  const tag = getTagMeta(topic.tag);
-                  const isSelected = topic.id === selectedTopic?.id;
-                  const isActive = topic.id === activeTopic?.id;
-                  const isCounting = isActive && state.isRunning;
-                  const isDragging = dragState?.draggedId === topic.id;
-                  const dropPlacement =
-                    dragState?.draggedId &&
-                      dragState.draggedId !== topic.id &&
-                      dragState.overId === topic.id
-                      ? dragState.placement
-                      : '';
+              <div className="topics-panel__body">
+                <div className="topic-list" role="list" aria-label="Agenda topics">
+                  {topics.map((topic) => {
+                    const tag = getTagMeta(topic.tag);
+                    const isSelected = topic.id === selectedTopic?.id;
+                    const isActive = topic.id === activeTopic?.id;
+                    const isCounting = isActive && state.isRunning;
+                    const isDragging = dragState?.draggedId === topic.id;
+                    const dropPlacement =
+                      dragState?.draggedId &&
+                        dragState.draggedId !== topic.id &&
+                        dragState.overId === topic.id
+                        ? dragState.placement
+                        : '';
 
-                  return (
-                    <button
-                      key={topic.id}
-                      type="button"
-                      role="listitem"
-                      draggable={topics.length > 1}
-                      className={`topic-card${isSelected ? ' is-selected' : ''}${topic.addressed ? ' is-addressed' : ''
-                        }${isActive ? ' is-active' : ''}${isCounting ? ' is-counting' : ''}${isDragging ? ' is-dragging' : ''
-                        }${dropPlacement === 'before' ? ' is-drop-before' : ''}${dropPlacement === 'after' ? ' is-drop-after' : ''
-                        }`}
-                      onClick={() => selectTopic(topic.id)}
-                      onDragStart={(event) => handleTopicDragStart(event, topic.id)}
-                      onDragOver={(event) => handleTopicDragOver(event, topic.id)}
-                      onDrop={(event) => handleTopicDrop(event, topic.id)}
-                      onDragEnd={handleTopicDragEnd}
-                    >
-                      <span className={`topic-card__rail topic-card__rail--${tag?.tone ?? 'neutral'}`} />
-                      <span className="topic-card__content">
-                        <span className="topic-card__meta">
-                          <span
-                            className={`topic-chip topic-chip--${tag?.tone ?? 'neutral'}${topic.tag ? '' : ' is-empty'
-                              }`}
-                          >
-                            {tag?.label ?? 'Select tag'}
+                    return (
+                      <button
+                        key={topic.id}
+                        type="button"
+                        role="listitem"
+                        draggable={topics.length > 1}
+                        className={`topic-card${isSelected ? ' is-selected' : ''}${topic.addressed ? ' is-addressed' : ''
+                          }${isActive ? ' is-active' : ''}${isCounting ? ' is-counting' : ''}${isDragging ? ' is-dragging' : ''
+                          }${dropPlacement === 'before' ? ' is-drop-before' : ''}${dropPlacement === 'after' ? ' is-drop-after' : ''
+                          }`}
+                        onClick={() => selectTopic(topic.id)}
+                        onDragStart={(event) => handleTopicDragStart(event, topic.id)}
+                        onDragOver={(event) => handleTopicDragOver(event, topic.id)}
+                        onDrop={(event) => handleTopicDrop(event, topic.id)}
+                        onDragEnd={handleTopicDragEnd}
+                      >
+                        <span className={`topic-card__rail topic-card__rail--${tag?.tone ?? 'neutral'}`} />
+                        <span className="topic-card__content">
+                          <span className="topic-card__meta">
+                            <span
+                              className={`topic-chip topic-chip--${tag?.tone ?? 'neutral'}${topic.tag ? '' : ' is-empty'
+                                }`}
+                            >
+                              {tag?.label ?? 'Select tag'}
+                            </span>
+                            <span>{formatShortDuration(topic.seconds)}</span>
                           </span>
-                          <span>{formatShortDuration(topic.seconds)}</span>
-                        </span>
-                        <span className="topic-card__title">{topic.name}</span>
-                        <span className="topic-card__progress" aria-hidden="true">
-                          <span className="topic-card__progress-notes">
-                            {topic.notes.map((note, noteIndex) => {
-                              const isPassing =
-                                isActive &&
-                                state.isRunning &&
-                                activeTopic.elapsed >= note.offsetSeconds &&
-                                activeTopic.elapsed < note.offsetSeconds + 8;
-
-                              return (
-                                <span
-                                  key={note.id}
-                                  className={`topic-card__progress-note${hoveredNoteId === note.id || isPassing ? ' is-highlighted' : ''
-                                    }${isPassing ? ' is-passing' : ''}`}
-                                  style={{ left: `${getNoteMarkerOffset(topic, note)}%` }}
-                                  onMouseEnter={() => setHoveredNoteId(note.id)}
-                                  onMouseLeave={() => setHoveredNoteId((previous) =>
-                                    previous === note.id ? null : previous,
-                                  )}
-                                >
-                                  <span className="topic-card__progress-note-number">
-                                    {noteIndex + 1}
-                                  </span>
-                                  <span className="topic-card__progress-tooltip">{note.text}</span>
-                                </span>
-                              );
-                            })}
-                          </span>
-                          <ProgressVisual
-                            percent={getTopicProgress(topic)}
+                          <span className="topic-card__title">{topic.name}</span>
+                          <TopicProgressTrack
+                            topic={topic}
+                            notes={getRenderableTopicNotes(topic)}
                             themeId={themeId}
-                            type="bar"
+                            hoveredNoteId={hoveredNoteId}
+                            onHoverNote={setHoveredNoteId}
+                            onLeaveNote={(noteId) =>
+                              setHoveredNoteId((previous) => (previous === noteId ? null : previous))
+                            }
+                            previewedNoteId={previewedNoteId}
+                            isActive={isActive}
+                            isRunning={state.isRunning}
+                            activeElapsed={activeTopic?.elapsed ?? 0}
+                            hideNotes={shouldHideTopicCardProgressNotes}
                           />
                         </span>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+                      </button>
+                    );
+                  })}
+                </div>
 
-              <p className="topics-estimate">EST COMPLETION BY {estimatedCompletionLabel}</p>
+                <p className="topics-estimate">EST COMPLETION BY {estimatedCompletionLabel}</p>
+              </div>
             </div>
           </section>
+
+          {isMobileViewport ? (
+            <section className="column column-actions-mobile">
+              <AgendaActionsPanel {...agendaActionsPanelProps} />
+            </section>
+          ) : null}
 
           <section className="column column-detail">
             <div className="panel detail-panel">
@@ -1720,7 +3541,22 @@ export default function App() {
                       <p>Selected topic</p>
                       <h2>{selectedTopicStatusLabel}</h2>
                     </div>
-                    <strong>{formatClock(selectedTopicRemainingSeconds)}</strong>
+                    <div className="detail-panel__header-controls">
+                      <strong>{formatClock(selectedTopicRemainingSeconds)}</strong>
+                      {isMobileViewport ? (
+                        <MobileCopyMenu
+                          buttonRef={detailCopyButtonRef}
+                          menuRef={detailCopyMenuRef}
+                          copied={copiedMobileCopyScope === 'detail'}
+                          isOpen={isDetailMobileCopyMenuOpen}
+                          menuId="detail-copy-menu"
+                          buttonLabel="Show topic copy actions"
+                          actionLabel="Copy topic markdown"
+                          onToggle={() => toggleMobileCopyMenu('detail')}
+                          onAction={() => handleMobileCopyAction('topic', 'detail')}
+                        />
+                      ) : null}
+                    </div>
                   </div>
 
                   {nextTopic ? (
@@ -1764,26 +3600,15 @@ export default function App() {
 
                     <label className="select-pill">
                       <span className="sr-only">Topic duration</span>
-                      <select
-                        value={selectedTopic.seconds}
-                        onChange={(event) => updateSelectedTopicDuration(event.target.value)}
-                      >
-                        {durationOptions.map((option) => (
-                          <option key={option.seconds} value={option.seconds}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-
-                    <label className="select-pill">
-                      <span className="sr-only">Custom topic duration</span>
                       <input
                         type="text"
                         value={durationDraft}
                         className="duration-input"
+                        role="combobox"
+                        aria-label="Topic duration"
+                        list="topic-duration-options"
                         placeholder="1:30 or 1m 30s"
-                        onChange={(event) => setDurationDraft(event.target.value)}
+                        onChange={(event) => handleDurationDraftChange(event.target.value)}
                         onBlur={commitDurationDraft}
                         onKeyDown={(event) => {
                           if (event.key !== 'Enter') {
@@ -1794,6 +3619,11 @@ export default function App() {
                           commitDurationDraft();
                         }}
                       />
+                      <datalist id="topic-duration-options">
+                        {durationSuggestions.map((label) => (
+                          <option key={label} value={label} />
+                        ))}
+                      </datalist>
                     </label>
                   </div>
 
@@ -1815,12 +3645,14 @@ export default function App() {
                       </div>
                     </div>
 
-                    <form className="note-form" onSubmit={addNote}>
+                    <form className="note-form" onSubmit={addNote} autoComplete="off">
                       <input
                         ref={noteInputRef}
                         type="text"
+                        autoComplete="off"
                         value={noteDraft}
                         onChange={(event) => updateNoteDraft(event.target.value)}
+                        onKeyDown={handleNoteInputKeyDown}
                         placeholder={
                           isEditingNote
                             ? 'Edit note'
@@ -1831,7 +3663,7 @@ export default function App() {
                         <button
                           type="button"
                           className="note-form__cancel"
-                          onClick={clearNoteComposer}
+                          onClick={cancelNoteComposer}
                         >
                           Cancel
                         </button>
@@ -1839,7 +3671,7 @@ export default function App() {
                     </form>
 
                     <div className="note-list">
-                      {selectedTopic.notes.map((note, noteIndex) => (
+                      {renderedSelectedTopicNotes.map((note, noteIndex) => (
                         <article
                           key={note.id}
                           className={`note-bubble${hoveredNoteId === note.id ? ' is-highlighted' : ''}`}
@@ -1919,10 +3751,19 @@ export default function App() {
                       </button>
                     ) : null}
                     {!isSelectedTopicCounting ? (
-                      <button type="button" onClick={revisitTopic}>
-                        {selectedTopicVisitLabel}
+                      <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
+                        <button type="button" onClick={revisitTopic} style={{ flex: 1 }}>
+                          {selectedTopicVisitLabel}
+                        </button>
+                        <button type="button" onClick={revisitSecondaryTopic} title="Start as a secondary concurrent topic" style={{ flex: 1, background: 'var(--panel-float)', color: 'var(--ink)' }}>
+                          Side-by-side
+                        </button>
+                      </div>
+                    ) : (
+                      <button type="button" onClick={revisitSecondaryTopic} title="Start as a secondary concurrent topic" style={{ background: 'var(--panel-float)', color: 'var(--ink)' }}>
+                        Side-by-side
                       </button>
-                    ) : null}
+                    )}
                     <button type="button" className="danger-button" onClick={removeSelectedTopic}>
                       Remove topic
                     </button>
@@ -1941,75 +3782,173 @@ export default function App() {
             </div>
           </section>
 
-          <section className="column column-actions">
-            <section className="panel agenda-actions-panel" aria-label="Agenda action items">
-              <div className="section-header section-header--compact agenda-actions-panel__header">
-                <div>
-                  <p>Action Items</p>
-                  <h2>Agenda queue</h2>
+          <section className="column column-side">
+            {!isSessionPanelMinimized ? (
+              <div
+                className={`panel session-panel top-card time-card${isEndingSoon ? ' is-ending-soon' : ''}${didTopicEnd ? ' is-ended' : ''
+                  }`}
+              >
+                <div className="section-header section-header--compact session-panel__header">
+                  <div>
+                    <p>Session clock</p>
+                    <h2>Time so far</h2>
+                  </div>
+                  <div className="session-panel__header-controls">
+                    <strong>{formatShortDuration(totalElapsed)}</strong>
+                    <button
+                      type="button"
+                      className="session-panel__minimize"
+                      aria-label="Minimize session clock"
+                      title="Minimize session clock"
+                      onClick={() => setIsSessionPanelMinimized(true)}
+                    >
+                      <MinimizeIcon />
+                    </button>
+                  </div>
                 </div>
-                <div className="agenda-actions-panel__header-controls">
-                  <strong>{totalActionItemCount}</strong>
+
+                {sessionTopic ? (
                   <button
                     type="button"
-                    className="agenda-actions-toggle"
-                    aria-expanded={isAgendaActionsExpanded}
-                    aria-controls="agenda-actions-content"
-                    aria-label={isAgendaActionsExpanded ? 'Collapse action items' : 'Expand action items'}
-                    onClick={() => setIsAgendaActionsExpanded((previous) => !previous)}
+                    className="time-card__focus time-card__focus-button"
+                    aria-label={`Go to current topic ${sessionTopic.name}`}
+                    onClick={() => selectTopic(sessionTopic.id)}
                   >
-                    <ChevronIcon expanded={isAgendaActionsExpanded} />
+                    <span>Current topic remaining</span>
+                    <strong>{formatClock(sessionTopicRemainingSeconds)}</strong>
+                  </button>
+                ) : (
+                  <div className="time-card__focus">
+                    <span>No topic selected</span>
+                    <strong>--:--</strong>
+                  </div>
+                )}
+
+                <ProgressVisual
+                  percent={sessionProgressPercent}
+                  themeId={themeId}
+                  type={themeId === 'vibrant' ? 'circular' : 'bar'}
+                  size={120}
+                />
+
+                <div className="metric-row">
+                  <span>Total</span>
+                  <strong>{formatShortDuration(totalSeconds)}</strong>
+                </div>
+                <div className="metric-row">
+                  <span>Remaining</span>
+                  <strong>{formatShortDuration(remainingSessionSeconds)}</strong>
+                </div>
+                <div className="session-controls">
+                  <label className="toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={state.autoAdvance}
+                      onChange={(event) =>
+                        setState((previous) => ({ ...previous, autoAdvance: event.target.checked }))
+                      }
+                    />
+                    <span>Auto-advance topic</span>
+                  </label>
+                  <button type="button" className={`primary-button${state.isRunning ? ' is-running' : ''}`} onClick={toggleTimer}>
+                    {state.isRunning ? 'Pause session' : 'Start session'}
+                  </button>
+                  <button type="button" className="secondary-button" onClick={enterFocusMode}>
+                    Focus mode
                   </button>
                 </div>
               </div>
-
-              <p className="agenda-actions-summary">
-                {openActionItemCount} open / {completedActionItemCount} done
-              </p>
-
-              {isAgendaActionsExpanded ? (
-                actionGroups.length ? (
-                  <div id="agenda-actions-content" className="agenda-action-groups">
-                    {actionGroups.map((group) => (
-                      <section key={group.topicId} className="agenda-action-group">
-                        <button
-                          type="button"
-                          className="agenda-action-group__topic"
-                          onClick={() => selectTopic(group.topicId)}
-                        >
-                          {group.topicName}
-                        </button>
-                        <div className="agenda-action-group__items">
-                          {group.items.map((action) => (
-                            <label key={action.noteId} className="action-item">
-                              <input
-                                type="checkbox"
-                                checked={action.checked}
-                                onChange={(event) =>
-                                  toggleActionItemForTopic(
-                                    group.topicId,
-                                    action.noteId,
-                                    event.target.checked,
-                                  )
-                                }
-                              />
-                              <span>{action.label}</span>
-                            </label>
-                          ))}
-                        </div>
-                      </section>
-                    ))}
-                  </div>
-                ) : (
-                  <p id="agenda-actions-content" className="empty-copy">
-                    No action items yet across this agenda.
-                  </p>
-                )
-              ) : null}
-            </section>
+            ) : null}
+            {!isMobileViewport ? <AgendaActionsPanel {...agendaActionsPanelProps} /> : null}
           </section>
         </section>
+
+        {isSessionPanelMinimized ? (
+          <section className="panel session-float" role="region" aria-label="Floating session clock">
+            <div className="session-float__header">
+              <p>Session clock</p>
+              <button
+                type="button"
+                className="session-float__expand"
+                aria-label="Expand session clock"
+                title="Expand session clock"
+                onClick={() => setIsSessionPanelMinimized(false)}
+              >
+                <ExpandIcon />
+              </button>
+            </div>
+
+            <div className="session-float__body">
+              <div className="session-float__clock-shell">
+                {sessionTopic ? (
+                  <button
+                    type="button"
+                    className="session-float__ring-button"
+                    aria-label={`Go to current topic ${sessionTopic.name}`}
+                    onClick={() => selectTopic(sessionTopic.id)}
+                  >
+                    <FocusAgendaRing
+                      topics={topics}
+                      currentIndex={currentIndex}
+                      sessionProgressPercent={sessionProgressPercent}
+                    remainingSessionSeconds={remainingSessionSeconds}
+                    totalSeconds={totalSeconds}
+                    isRunning={state.isRunning}
+                    compact
+                    progressOutside
+                    className="focus-agenda-ring session-float__ring"
+                  />
+                </button>
+              ) : (
+                  <FocusAgendaRing
+                    topics={topics}
+                    currentIndex={currentIndex}
+                    sessionProgressPercent={sessionProgressPercent}
+                    remainingSessionSeconds={remainingSessionSeconds}
+                    totalSeconds={totalSeconds}
+                    isRunning={state.isRunning}
+                    compact
+                    progressOutside
+                    className="focus-agenda-ring session-float__ring"
+                  />
+                )}
+              </div>
+              {sessionTopic ? (
+                <div className="session-float__copy" aria-hidden="true">
+                  <span>{sessionTopic.name}</span>
+                </div>
+              ) : (
+                <div className="session-float__copy">
+                  <span>No topic selected</span>
+                  <small>{formatShortDuration(totalElapsed)} elapsed</small>
+                </div>
+              )}
+            </div>
+
+            <div className="session-float__actions">
+              <button
+                type="button"
+                className="session-float__icon-button"
+                aria-label={state.isRunning ? 'Pause session' : 'Start session'}
+                title={state.isRunning ? 'Pause session' : 'Start session'}
+                onClick={toggleTimer}
+              >
+                <PlayPauseIcon isRunning={state.isRunning} />
+              </button>
+              <button
+                type="button"
+                className="session-float__focus-button"
+                onClick={enterFocusMode}
+              >
+                Focus mode
+              </button>
+            </div>
+          </section>
+        ) : null}
       </section>
-    </main >
+
+        </>
+      )}
+    </main>
   );
 }

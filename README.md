@@ -82,3 +82,7 @@ npm run test
 - Prefer local-first persistence over remote services.
 - If adding new features, preserve the current storage migration path instead of replacing it.
 - If the UI changes, keep the menu drawer, column-first structure, bright palette, and note-to-action-item relationship intact unless the product direction here is updated first.
+
+## Inline widget
+
+The URL-backed provider widget for Notes from Calendar is documented in [docs/inline-widget.md](docs/inline-widget.md). It uses saved v3 agenda data and an exact-origin, versioned `postMessage` contract.

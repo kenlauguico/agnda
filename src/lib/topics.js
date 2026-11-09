@@ -80,6 +80,18 @@ function normalizeNotes(candidateNotes) {
             : makeEntityId(`note-${index + 1}`),
         text,
         offsetSeconds: normalizeElapsed(note.offsetSeconds ?? note.elapsed ?? 0),
+        ...(typeof note.agendaId === 'string' && note.agendaId.trim()
+          ? { agendaId: note.agendaId.trim() }
+          : {}),
+        ...(typeof note.topicId === 'string' && note.topicId.trim()
+          ? { topicId: note.topicId.trim() }
+          : {}),
+        ...(typeof note.capturedAt === 'string' && !Number.isNaN(Date.parse(note.capturedAt))
+          ? { capturedAt: new Date(note.capturedAt).toISOString() }
+          : {}),
+        ...(typeof note.timeZone === 'string' && note.timeZone.trim()
+          ? { timeZone: note.timeZone.trim() }
+          : {}),
       };
     })
     .filter(Boolean);

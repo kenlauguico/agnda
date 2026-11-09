@@ -45,6 +45,52 @@ function getAgendaStorageKey(agendaId) {
   return `${AGENDA_KEY_PREFIX}${normalizeAgendaId(agendaId)}`;
 }
 
+function extractHashFromTarget(target) {
+  const trimmed = typeof target === 'string' ? target.trim() : '';
+  if (!trimmed || trimmed === '#') {
+    return '';
+  }
+
+  if (trimmed.startsWith('#')) {
+    return trimmed;
+  }
+
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return '';
+  }
+
+  try {
+    return new URL(trimmed).hash || '';
+  } catch {
+    return '';
+  }
+}
+
+function normalizeSourceHash(value, agendaId = DEFAULT_AGENDA_ID) {
+  const hash = extractHashFromTarget(value);
+  return hash || buildAgendaHash(agendaId);
+}
+
+function resolveAgendaIdentity(candidate = {}, fallbackAgendaId = DEFAULT_AGENDA_ID) {
+  const agendaId = normalizeAgendaId(
+    candidate.agendaId ?? candidate.title,
+    fallbackAgendaId,
+  );
+  const sourceHash = normalizeSourceHash(
+    candidate.sourceHash ?? candidate.hash ?? candidate.target,
+    agendaId,
+  );
+  const hashInfo = parseAgendaHash(sourceHash);
+  const kind = hashInfo.kind === 'share' ? 'share' : 'slug';
+
+  return {
+    agendaId,
+    sourceHash,
+    kind,
+    identityKey: kind === 'share' ? sourceHash : agendaId,
+  };
+}
+
 function readJSON(storage, key) {
   if (!storage || typeof storage.getItem !== 'function' || !key) {
     return null;
@@ -130,6 +176,17 @@ function getSelectedTopicId(record, topics, currentIndex) {
   return topics[currentIndex]?.id ?? null;
 }
 
+function getSecondaryTopicId(record, topics, secondaryIndex) {
+  if (
+    typeof record?.secondaryTopicId === 'string' &&
+    topics.some((topic) => topic.id === record.secondaryTopicId)
+  ) {
+    return record.secondaryTopicId;
+  }
+
+  return secondaryIndex >= 0 ? topics[secondaryIndex]?.id ?? null : null;
+}
+
 export function buildInitialState(topics, options = {}) {
   const normalized = normalizeTopics(topics);
   const allowEmptyTopics = toBoolean(options.allowEmptyTopics);
@@ -146,6 +203,7 @@ export function buildInitialState(topics, options = {}) {
   return {
     schemaVersion: STORAGE_SCHEMA_VERSION,
     agendaId,
+    sourceHash: normalizeSourceHash(options.sourceHash, agendaId),
     title: normalizeAgendaTitle(options.title, agendaId),
     topics: fallbackTopics,
     currentIndex,
@@ -154,7 +212,9 @@ export function buildInitialState(topics, options = {}) {
       fallbackTopics.some((topic) => topic.id === options.selectedTopicId)
         ? options.selectedTopicId
         : fallbackTopics[currentIndex]?.id ?? null,
-    autoAdvance: toBoolean(options.autoAdvance),
+    secondaryIndex: -1,
+    secondaryTopicId: null,
+    autoAdvance: toBoolean(options.autoAdvance ?? true),
     autoRevisitOnSelect: toBoolean(options.autoRevisitOnSelect),
     isRunning: toBoolean(options.isRunning),
     updatedAt: normalizeTimestamp(options.updatedAt),
@@ -178,6 +238,10 @@ export function migrateStateRecord(
   }
 
   const currentIndex = clampIndex(record.currentIndex ?? record.currentNumber ?? 0, topics.length);
+  const rawSecondary = record.secondaryIndex;
+  const secondaryIndex = Number.isInteger(rawSecondary) && rawSecondary >= 0 && rawSecondary < topics.length
+    ? rawSecondary
+    : -1;
   const agendaId = normalizeAgendaId(
     record.agendaId ?? options.agendaId ?? record.title ?? options.title,
     DEFAULT_AGENDA_ID,
@@ -186,11 +250,17 @@ export function migrateStateRecord(
   return {
     schemaVersion: STORAGE_SCHEMA_VERSION,
     agendaId,
+    sourceHash: normalizeSourceHash(
+      options.sourceHash ?? record.sourceHash ?? options.target,
+      agendaId,
+    ),
     title: normalizeAgendaTitle(record.title ?? options.title, agendaId),
     topics,
     currentIndex,
     selectedTopicId: getSelectedTopicId(record, topics, currentIndex),
-    autoAdvance: toBoolean(record.autoAdvance ?? record.autoTopic ?? false),
+    secondaryIndex,
+    secondaryTopicId: getSecondaryTopicId(record, topics, secondaryIndex),
+    autoAdvance: toBoolean(record.autoAdvance ?? record.autoTopic ?? true),
     autoRevisitOnSelect: toBoolean(record.autoRevisitOnSelect),
     // We intentionally pause legacy sessions on migration to avoid multi-day drift.
     isRunning:
@@ -240,34 +310,50 @@ function loadStateFromKey(storage, key, fallbackTopics, options = {}) {
 }
 
 function buildLibraryEntry(state, updatedAt = Date.now()) {
-  const agendaId = normalizeAgendaId(state?.agendaId ?? state?.title, DEFAULT_AGENDA_ID);
+  const { agendaId, sourceHash, kind, identityKey } = resolveAgendaIdentity(state);
   const topics = normalizeTopics(state?.topics);
 
   return {
     agendaId,
-    hash: buildAgendaHash(agendaId),
+    kind,
+    identityKey,
+    sourceHash,
+    hash: sourceHash,
     title: normalizeAgendaTitle(state?.title, agendaId),
     firstTopic: topics[0]?.name ?? `#${agendaId}`,
+    target: sourceHash,
     updatedAt: normalizeTimestamp(updatedAt),
   };
 }
 
 function buildLibraryEntryFromRecord(record, options = {}) {
-  const agendaId = normalizeAgendaId(
-    options.agendaId ?? record?.agendaId ?? record?.title,
+  const { agendaId, sourceHash, kind, identityKey } = resolveAgendaIdentity(
+    {
+      agendaId: options.agendaId ?? record?.agendaId,
+      title: options.title ?? record?.title,
+      sourceHash: options.sourceHash ?? record?.sourceHash,
+      hash: options.hash,
+      target: options.target,
+    },
     DEFAULT_AGENDA_ID,
   );
   const topics = normalizeTopics(record?.topics);
 
   return {
     agendaId,
-    hash: buildAgendaHash(agendaId),
+    kind,
+    identityKey,
+    sourceHash,
+    hash:
+      typeof options.hash === 'string' && options.hash.trim()
+        ? options.hash.trim()
+        : sourceHash,
     title: normalizeAgendaTitle(options.title ?? record?.title, agendaId),
     firstTopic: topics[0]?.name ?? `#${agendaId}`,
     target:
       typeof options.target === 'string' && options.target.trim()
         ? options.target.trim()
-        : buildAgendaHash(agendaId),
+        : sourceHash,
     updatedAt: normalizeTimestamp(options.updatedAt ?? record?.updatedAt),
   };
 }
@@ -307,44 +393,55 @@ function deriveLegacyEntryOptions(key, record) {
 }
 
 function mergeLibraryEntries(entries) {
-  const byAgendaId = new Map();
+  const byIdentityKey = new Map();
 
   entries.forEach((entry) => {
     if (!entry || typeof entry !== 'object') {
       return;
     }
 
-    const agendaId = normalizeAgendaId(
-      entry.agendaId ?? entry.hash ?? entry.title,
+    const identity = resolveAgendaIdentity(
+      {
+        agendaId: entry.agendaId,
+        title: entry.title,
+        sourceHash: entry.sourceHash,
+        hash: entry.hash,
+        target: entry.target,
+      },
       '',
     );
-
-    if (!agendaId) {
+    if (!identity.agendaId || !identity.identityKey) {
       return;
     }
 
     const normalizedEntry = {
-      agendaId,
-      hash: buildAgendaHash(agendaId),
-      title: normalizeAgendaTitle(entry.title, agendaId),
+      agendaId: identity.agendaId,
+      kind: identity.kind,
+      identityKey: identity.identityKey,
+      sourceHash: identity.sourceHash,
+      hash:
+        typeof entry.hash === 'string' && entry.hash.trim()
+          ? entry.hash.trim()
+          : identity.sourceHash,
+      title: normalizeAgendaTitle(entry.title, identity.agendaId),
       firstTopic:
         typeof entry.firstTopic === 'string' && entry.firstTopic.trim()
           ? entry.firstTopic.trim()
-          : `#${agendaId}`,
+          : `#${identity.agendaId}`,
       target:
         typeof entry.target === 'string' && entry.target.trim()
           ? entry.target.trim()
-          : buildAgendaHash(agendaId),
+          : identity.sourceHash,
       updatedAt: normalizeTimestamp(entry.updatedAt),
     };
 
-    const existing = byAgendaId.get(agendaId);
+    const existing = byIdentityKey.get(identity.identityKey);
     if (!existing || normalizedEntry.updatedAt >= existing.updatedAt) {
-      byAgendaId.set(agendaId, normalizedEntry);
+      byIdentityKey.set(identity.identityKey, normalizedEntry);
     }
   });
 
-  return [...byAgendaId.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+  return [...byIdentityKey.values()].sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 function scanStoredAgendas(storage) {
@@ -367,6 +464,53 @@ function scanStoredAgendas(storage) {
     }
 
     entries.push(buildLibraryEntry(migrated, migrated.updatedAt));
+  }
+
+  return entries;
+}
+
+function scanHashAgendaEntries(storage) {
+  if (!storage || typeof storage.length !== 'number' || typeof storage.key !== 'function') {
+    return [];
+  }
+
+  const entries = [];
+
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (!key || !key.startsWith('#')) {
+      continue;
+    }
+
+    const hashInfo = parseAgendaHash(key);
+    if (hashInfo.kind !== 'share') {
+      continue;
+    }
+
+    const parsed = readJSON(storage, key);
+    const fallbackTopics = hashInfo.topics.length
+      ? hashInfo.topics
+      : instantiateTopics(DEFAULT_TOPICS);
+    const migrated = migrateStateRecord(parsed, fallbackTopics, {
+      agendaId: hashInfo.agendaId,
+      title: hashInfo.title,
+      sourceHash: key,
+    });
+
+    if (!migrated) {
+      continue;
+    }
+
+    entries.push(
+      buildLibraryEntryFromRecord(migrated, {
+        agendaId: hashInfo.agendaId,
+        title: hashInfo.title,
+        hash: key,
+        sourceHash: key,
+        target: key,
+        updatedAt: migrated.updatedAt,
+      }),
+    );
   }
 
   return entries;
@@ -418,6 +562,7 @@ export function listSavedAgendas(storage = globalThis.window?.localStorage) {
   const mergedEntries = mergeLibraryEntries([
     ...(Array.isArray(indexedEntries) ? indexedEntries : []),
     ...scanStoredAgendas(storage),
+    ...scanHashAgendaEntries(storage),
     ...scanLegacyAgendaEntries(storage),
   ]);
 
@@ -437,8 +582,21 @@ export function findSavedAgendaEntry(
     return null;
   }
 
+  const entries = listSavedAgendas(storage);
+  const directSlugEntry = entries.find(
+    (entry) => entry.kind !== 'share' && entry.agendaId === normalizedAgendaId,
+  );
+  if (directSlugEntry) {
+    return directSlugEntry;
+  }
+
   return (
-    listSavedAgendas(storage).find((entry) => entry.agendaId === normalizedAgendaId) ?? null
+    entries.find(
+      (entry) =>
+        entry.agendaId === normalizedAgendaId &&
+        typeof entry.target === 'string' &&
+        /^https?:\/\//i.test(entry.target),
+    ) ?? null
   );
 }
 
@@ -452,10 +610,12 @@ export function loadInitialState(
     : instantiateTopics(DEFAULT_TOPICS);
   const agendaId = normalizeAgendaId(hashInfo.agendaId, DEFAULT_AGENDA_ID);
   const title = normalizeAgendaTitle(hashInfo.title, agendaId);
+  const sourceHash = normalizeSourceHash(hash, agendaId);
 
   if (hashInfo.kind === 'slug') {
     const savedAgenda = loadStateFromKey(storage, getAgendaStorageKey(agendaId), fallbackTopics, {
       agendaId,
+      sourceHash,
       title,
     });
 
@@ -465,6 +625,7 @@ export function loadInitialState(
 
     const mirroredCurrentAgenda = loadStateFromKey(storage, STORAGE_KEY, fallbackTopics, {
       agendaId,
+      sourceHash,
       title,
     });
     if (mirroredCurrentAgenda?.agendaId === agendaId) {
@@ -475,30 +636,40 @@ export function loadInitialState(
     if (savedEntry) {
       return (
         loadSavedAgenda(storage, savedEntry) ??
-        buildInitialState([], { agendaId, title, allowEmptyTopics: true })
+        buildInitialState([], { agendaId, title, sourceHash, allowEmptyTopics: true })
       );
     }
 
-    return buildInitialState([], { agendaId, title, allowEmptyTopics: true });
+    return buildInitialState([], { agendaId, title, sourceHash, allowEmptyTopics: true });
   }
 
   if (hashInfo.kind === 'share') {
-    return buildInitialState(fallbackTopics, { agendaId, title });
+    const savedShareAgenda = loadStateFromKey(storage, sourceHash, fallbackTopics, {
+      agendaId,
+      sourceHash,
+      title,
+    });
+
+    if (savedShareAgenda) {
+      return savedShareAgenda;
+    }
+
+    return buildInitialState(fallbackTopics, { agendaId, title, sourceHash });
   }
 
   const modern = reconcileRunningState(
-    migrateStateRecord(readJSON(storage, STORAGE_KEY), fallbackTopics, { agendaId, title }),
+    migrateStateRecord(readJSON(storage, STORAGE_KEY), fallbackTopics, { agendaId, sourceHash, title }),
   );
   if (modern) {
     return modern;
   }
 
-  const legacy = loadLegacyState(storage, fallbackTopics, { agendaId, title });
+  const legacy = loadLegacyState(storage, fallbackTopics, { agendaId, sourceHash, title });
   if (legacy) {
     return legacy;
   }
 
-  return buildInitialState(fallbackTopics, { agendaId, title });
+  return buildInitialState(fallbackTopics, { agendaId, title, sourceHash });
 }
 
 export function loadSavedAgenda(
@@ -515,19 +686,28 @@ export function loadSavedAgenda(
   const fallbackTopics = hashInfo.topics.length
     ? hashInfo.topics
     : instantiateTopics(DEFAULT_TOPICS);
-  const agendaId = normalizeAgendaId(
-    agendaEntry.agendaId ?? hashInfo.agendaId,
+  const identity = resolveAgendaIdentity(
+    {
+      agendaId: agendaEntry.agendaId ?? hashInfo.agendaId,
+      title: agendaEntry.title ?? hashInfo.title,
+      sourceHash: agendaEntry.sourceHash,
+      hash,
+      target: agendaEntry.target,
+    },
     DEFAULT_AGENDA_ID,
   );
+  const { agendaId, sourceHash, kind } = identity;
   const title = normalizeAgendaTitle(agendaEntry.title ?? hashInfo.title, agendaId);
   const target =
     typeof agendaEntry.target === 'string' && agendaEntry.target.trim()
       ? agendaEntry.target.trim()
       : '';
-  const keys = [target, getAgendaStorageKey(agendaId), hash];
+  const keys = kind === 'share'
+    ? [target, sourceHash, hash]
+    : [target, getAgendaStorageKey(agendaId), hash];
 
   for (const key of [...new Set(keys)].filter(Boolean)) {
-    const loaded = loadStateFromKey(storage, key, fallbackTopics, { agendaId, title });
+    const loaded = loadStateFromKey(storage, key, fallbackTopics, { agendaId, sourceHash, title });
     if (loaded) {
       return loaded;
     }
@@ -548,15 +728,32 @@ export function deleteSavedAgenda(
     return;
   }
 
-  const agendaId = normalizeAgendaId(agendaEntry.agendaId, '');
+  const identity = resolveAgendaIdentity(
+    {
+      agendaId: agendaEntry.agendaId,
+      title: agendaEntry.title,
+      sourceHash: agendaEntry.sourceHash,
+      hash: agendaEntry.hash,
+      target: agendaEntry.target,
+    },
+    '',
+  );
+  const agendaId = identity.agendaId;
   if (!agendaId) {
     return;
   }
 
-  const keys = [
-    getAgendaStorageKey(agendaId),
-    typeof agendaEntry.target === 'string' ? agendaEntry.target.trim() : '',
-  ];
+  const keys = identity.kind === 'share'
+    ? [
+      typeof agendaEntry.target === 'string' ? agendaEntry.target.trim() : '',
+      identity.sourceHash,
+      typeof agendaEntry.hash === 'string' ? agendaEntry.hash.trim() : '',
+    ]
+    : [
+      getAgendaStorageKey(agendaId),
+      typeof agendaEntry.target === 'string' ? agendaEntry.target.trim() : '',
+      typeof agendaEntry.hash === 'string' ? agendaEntry.hash.trim() : '',
+    ];
 
   keys
     .filter(Boolean)
@@ -572,7 +769,10 @@ export function deleteSavedAgenda(
       }
     });
 
-  const nextEntries = listSavedAgendas(storage).filter((entry) => entry.agendaId !== agendaId);
+  const nextEntries = listSavedAgendas(storage).filter(
+    (entry) =>
+      (entry.identityKey ?? entry.sourceHash ?? entry.agendaId) !== identity.identityKey,
+  );
   writeJSON(storage, AGENDA_LIBRARY_KEY, nextEntries);
 }
 
@@ -608,14 +808,20 @@ export function saveState(state, storage = globalThis.window?.localStorage, opti
     ...payload,
     updatedAt,
   };
+  const identity = resolveAgendaIdentity(savedPayload);
 
   const previousAgendaId = normalizeAgendaId(options.previousAgendaId, '');
 
   writeJSON(storage, STORAGE_KEY, savedPayload);
-  writeJSON(storage, getAgendaStorageKey(savedPayload.agendaId), savedPayload);
+  if (identity.kind === 'share') {
+    writeJSON(storage, identity.sourceHash, savedPayload);
+  } else {
+    writeJSON(storage, getAgendaStorageKey(savedPayload.agendaId), savedPayload);
+  }
 
   if (
     previousAgendaId &&
+    identity.kind === 'slug' &&
     previousAgendaId !== savedPayload.agendaId &&
     typeof storage.removeItem === 'function'
   ) {
@@ -626,11 +832,16 @@ export function saveState(state, storage = globalThis.window?.localStorage, opti
     }
   }
 
+  const previousIdentityKey =
+    identity.kind === 'slug' && previousAgendaId && previousAgendaId !== savedPayload.agendaId
+      ? previousAgendaId
+      : '';
   const nextEntries = mergeLibraryEntries(
     listSavedAgendas(storage)
       .filter(
         (entry) =>
-          entry.agendaId !== previousAgendaId && entry.agendaId !== savedPayload.agendaId,
+          (entry.identityKey ?? entry.sourceHash ?? entry.agendaId) !== previousIdentityKey &&
+          (entry.identityKey ?? entry.sourceHash ?? entry.agendaId) !== identity.identityKey,
       )
       .concat(buildLibraryEntry(savedPayload, updatedAt)),
   );
